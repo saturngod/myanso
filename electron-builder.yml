@@ -1,0 +1,47 @@
+appId: app.myanmars.myanso
+productName: Myanso
+copyright: Copyright © 2025 COMQUAS
+
+directories:
+  output: dist
+  buildResources: build
+
+# Compiled output + native deps; exclude dev cache
+files:
+  - out/**/*
+  - node_modules/**/*
+  - icon.png
+  - "!node_modules/.cache"
+  - "!node_modules/.bin"
+
+mac:
+  category: public.app-category.developer-tools
+  icon: icon.png
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  # Lets users drag a folder onto the dock icon — macOS only forwards the
+  # drop (open-file) when CFBundleDocumentTypes declares the type.
+  extendInfo:
+    CFBundleDocumentTypes:
+      - CFBundleTypeName: Folder
+        CFBundleTypeRole: Viewer
+        LSItemContentTypes:
+          - public.folder
+        LSHandlerRank: Alternate
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+
+dmg:
+  title: Myanso ${version}
+
+win:
+  icon: icon.png
+  target: nsis
+
+linux:
+  icon: icon.png
+  target: AppImage

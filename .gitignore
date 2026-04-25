@@ -1,0 +1,12 @@
+node_modules/
+out/
+dist/
+.cache/
+.DS_Store
+*.log
+.vite/
+.claude
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+QWEN.md

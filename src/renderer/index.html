@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta
+            http-equiv="Content-Security-Policy"
+            content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';"
+        />
+        <title>Myanso</title>
+        <style>
+            :root {
+                color-scheme: dark;
+                --bg: #15171e;
+                --fg: #e4e4e4;
+                --muted: #8b8f99;
+                --accent: #69b4ff;
+                --border: #2a2d38;
+                --tab-bg: #1a1c24;
+                --tab-bg-active: #15171e;
+            }
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            html,
+            body {
+                width: 100%;
+                height: 100%;
+                background: var(--bg);
+                color: var(--fg);
+                overflow: hidden;
+                font-family:
+                    Menlo, "SF Mono", Monaco, "Noto Sans Myanmar",
+                    "Myanmar Sangam MN", "Myanmar MN", monospace;
+                font-size: 14px;
+                line-height: 1.35;
+            }
+
+            #chrome {
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 36px;
+                background: linear-gradient(180deg, #1e2029 0%, #191b23 100%);
+                border-bottom: 1px solid var(--border);
+                display: flex;
+                align-items: stretch;
+                padding: 0 8px;
+                gap: 6px;
+                -webkit-app-region: drag;
+                z-index: 100;
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+                    sans-serif;
+                font-size: 12px;
+                color: var(--muted);
+                user-select: none;
+            }
+            /* Reserve room for the macOS traffic-light buttons. Dropped
+               in native fullscreen (lights are hidden) and on non-mac
+               platforms (native titlebar lives above us, not behind). */
+            body.mac:not(.fullscreen) #chrome {
+                padding-left: 80px;
+            }
+            #tabbar {
+                flex: 1;
+                display: flex;
+                align-items: stretch;
+                gap: 2px;
+                overflow-x: auto;
+                overflow-y: hidden;
+                scrollbar-width: none;
+            }
+            #tabbar::-webkit-scrollbar {
+                display: none;
+            }
+            .tab {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 0 6px 0 10px;
+                min-width: 60px;
+                max-width: 220px;
+                background: var(--tab-bg);
+                color: var(--muted);
+                border: none;
+                border-top: 2px solid transparent;
+                border-bottom: 1px solid var(--border);
+                font: inherit;
+                cursor: pointer;
+                -webkit-app-region: no-drag;
+            }
+            .tab:hover {
+                color: var(--fg);
+            }
+            .tab.active {
+                background: var(--tab-bg-active);
+                color: var(--fg);
+                border-top-color: var(--accent);
+                border-bottom-color: var(--tab-bg-active);
+            }
+            .tab .tab-title {
+                flex: 1;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-family: Menlo, "SF Mono", Monaco, monospace;
+            }
+            .tab .tab-close {
+                opacity: 0;
+                font-size: 14px;
+                line-height: 1;
+                padding: 2px 5px;
+                border-radius: 3px;
+                color: var(--muted);
+            }
+            .tab:hover .tab-close,
+            .tab.active .tab-close {
+                opacity: 0.7;
+            }
+            .tab .tab-close:hover {
+                opacity: 1;
+                background: rgba(255, 255, 255, 0.12);
+                color: var(--fg);
+            }
+            #new-tab {
+                align-self: center;
+                background: transparent;
+                color: var(--muted);
+                border: none;
+                cursor: pointer;
+                font-size: 16px;
+                line-height: 1;
+                padding: 4px 10px;
+                border-radius: 4px;
+                -webkit-app-region: no-drag;
+            }
+            #new-tab:hover {
+                color: var(--fg);
+                background: rgba(255, 255, 255, 0.06);
+            }
+
+            #terminal-wrapper {
+                position: absolute;
+                top: 36px;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                overflow: hidden;
+            }
+
+            /* One .tab-root per tab, only the active tab's root is shown.
+               It hosts a recursive pane tree: .split (flex container) and
+               .leaf (terminal pane), with .divider between siblings. */
+            .tab-root {
+                position: absolute;
+                top: 8px;
+                left: 10px;
+                right: 10px;
+                bottom: 8px;
+                display: flex;
+            }
+            .tab-root.inactive {
+                display: none;
+            }
+            .split {
+                display: flex;
+                flex: 1 1 0;
+                min-width: 0;
+                min-height: 0;
+            }
+            .split.dir-row {
+                flex-direction: row;
+            }
+            .split.dir-col {
+                flex-direction: column;
+            }
+            .leaf {
+                position: relative;
+                flex: 1 1 0;
+                min-width: 0;
+                min-height: 0;
+            }
+            /* Inactive panes (only when there's more than one) get a
+               background-tinted overlay so the focused one stands out. */
+            .leaf.dim::after {
+                content: "";
+                position: absolute;
+                inset: 0;
+                background: rgba(21, 23, 30, 0.55);
+                pointer-events: none;
+                z-index: 50;
+            }
+            .divider {
+                background: var(--border);
+                position: relative;
+                z-index: 5;
+                flex: 0 0 1px;
+            }
+            .divider.dir-row {
+                cursor: col-resize;
+            }
+            .divider.dir-col {
+                cursor: row-resize;
+            }
+            /* Wider hit area without changing visual width. */
+            .divider::after {
+                content: "";
+                position: absolute;
+            }
+            .divider.dir-row::after {
+                top: 0;
+                bottom: 0;
+                left: -3px;
+                right: -3px;
+            }
+            .divider.dir-col::after {
+                left: 0;
+                right: 0;
+                top: -3px;
+                bottom: -3px;
+            }
+
+            /* THE BRAIN: xterm.js runs here per leaf. opacity:0 hides its
+               renderer but keeps the DOM alive — it parses ANSI, tracks
+               cursor, and captures keystrokes via its internal textarea. */
+            .hidden-terminal {
+                position: absolute;
+                inset: 0;
+                opacity: 0;
+                z-index: 10;
+            }
+
+            /* THE FACE: HTML mirror of the brain's cell buffer, one per
+               leaf. Browser shapes Myanmar correctly across grouped same-
+               style spans via native text layout. */
+            .output {
+                position: absolute;
+                inset: 0;
+                overflow: hidden;
+                white-space: pre;
+                outline: none;
+                z-index: 1;
+                pointer-events: none;
+            }
+            .line {
+                height: var(--cell-h, 1.35em);
+                line-height: var(--cell-h, 1.35em);
+                display: block;
+            }
+            .cursor {
+                background: var(--fg);
+                color: var(--bg);
+                display: inline-block;
+                min-width: 1ch;
+            }
+            .cursor.blurred {
+                background: transparent;
+                color: var(--fg);
+                outline: 1px solid var(--fg);
+                outline-offset: -1px;
+            }
+            @keyframes blink {
+                0%,
+                49% {
+                    opacity: 1;
+                }
+                50%,
+                100% {
+                    opacity: 0;
+                }
+            }
+            .cursor.blink {
+                animation: blink 1.06s step-end infinite;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="chrome">
+            <div id="tabbar"></div>
+            <button id="new-tab" title="New tab (⌘T)">+</button>
+        </div>
+        <div id="terminal-wrapper"></div>
+        <script type="module" src="./myanso.ts"></script>
+    </body>
+</html>

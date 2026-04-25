@@ -1,0 +1,216 @@
+import { app, BrowserWindow, Menu, nativeImage, ipcMain } from "electron";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { statSync } from "node:fs";
+import { initPtyHost, killSessionsFor } from "./pty.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Folder dropped on dock → use as cwd. File dropped → use its parent dir.
+function resolveCwd(p: string): string | null {
+  try {
+    return statSync(p).isDirectory() ? p : dirname(p);
+  } catch {
+    return null;
+  }
+}
+
+// open-file may fire before the renderer is ready (cold launch from a
+// dock drop). Queue the path; the renderer drains it via app:initial-cwd
+// when it creates its first tab. Warm drops are forwarded immediately.
+let pendingCwd: string | null = null;
+
+// icon.png lives at the project root; app.getAppPath() resolves to that
+// in dev and to the unpacked app dir in production.
+const appIcon = nativeImage.createFromPath(
+  join(app.getAppPath(), "icon.png"),
+);
+
+function createWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 700,
+    backgroundColor: "#15171e",
+    title: "Myanso",
+    icon: appIcon,
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    trafficLightPosition: { x: 12, y: 10 },
+    webPreferences: {
+      preload: join(__dirname, "../preload/index.mjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  if (process.env.ELECTRON_RENDERER_URL) {
+    win.loadURL(process.env.ELECTRON_RENDERER_URL);
+  } else {
+    win.loadFile(join(__dirname, "../renderer/index.html"));
+  }
+
+  // Block the Chromium right-click context menu (which shows Inspect Element)
+  // in production. Keep it in dev for debugging.
+  if (app.isPackaged) {
+    win.webContents.on("context-menu", (e) => e.preventDefault());
+  }
+
+  // Capture wc by reference so we can clean its sessions on close,
+  // even though webContents is destroyed by the time `closed` fires.
+  const wc = win.webContents;
+  win.on("closed", () => killSessionsFor(wc));
+
+  // Push fullscreen state to the renderer so it can drop the 80px
+  // traffic-light reservation when macOS hides them in native fullscreen.
+  const sendFs = (on: boolean) => {
+    if (!win.isDestroyed()) win.webContents.send("window:fullscreen", on);
+  };
+  win.on("enter-full-screen", () => sendFs(true));
+  win.on("leave-full-screen", () => sendFs(false));
+  win.webContents.on("did-finish-load", () => sendFs(win.isFullScreen()));
+
+  return win;
+}
+
+// Replace the default menu so Chromium's built-in accelerators don't
+// pre-empt renderer shortcuts. Shell tab/split actions use
+// registerAccelerator:false so key events still reach xterm's custom
+// handler in the renderer; New Window is main-side, so its accelerator
+// is registered normally and dispatched to the focused window's view of
+// reality (a fresh window is just made by main, no renderer plumbing).
+function buildMenu(): void {
+  const isMac = process.platform === "darwin";
+  const isDev = !app.isPackaged;
+
+  // Send an action to the focused window's renderer. The application menu
+  // is shared across windows on macOS, so click handlers must look up the
+  // active target dynamically rather than capturing a specific window.
+  const sendToFocused = (action: string) => {
+    const win = BrowserWindow.getFocusedWindow();
+    if (win && !win.isDestroyed()) win.webContents.send("menu:action", action);
+  };
+
+  const shellItem = (
+    label: string,
+    accelerator: string,
+    action: string,
+  ): Electron.MenuItemConstructorOptions => ({
+    label,
+    accelerator,
+    registerAccelerator: false,
+    click: () => sendToFocused(action),
+  });
+
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(isMac
+      ? ([
+          {
+            label: app.name,
+            submenu: [
+              { role: "about" },
+              { type: "separator" },
+              { role: "services" },
+              { type: "separator" },
+              { role: "hide" },
+              { role: "hideOthers" },
+              { role: "unhide" },
+              { type: "separator" },
+              { role: "quit" },
+            ],
+          },
+        ] as Electron.MenuItemConstructorOptions[])
+      : []),
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      label: "Shell",
+      submenu: [
+        {
+          label: "New Window",
+          accelerator: "CmdOrCtrl+N",
+          click: () => {
+            createWindow();
+          },
+        },
+        shellItem("New Tab", "CmdOrCtrl+T", "new-tab"),
+        { type: "separator" },
+        shellItem("Split Right", "CmdOrCtrl+D", "split-row"),
+        shellItem("Split Down", "CmdOrCtrl+Shift+D", "split-col"),
+        { type: "separator" },
+        shellItem("Close Pane", "CmdOrCtrl+W", "close-pane"),
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        ...(isDev
+          ? ([
+              { role: "reload" },
+              { role: "toggleDevTools" },
+              { type: "separator" },
+            ] as Electron.MenuItemConstructorOptions[])
+          : []),
+        { role: "togglefullscreen" },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [{ role: "minimize" }],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+// macOS dispatches dock drops as open-file. Fires before whenReady on cold
+// launch, so we queue and let the renderer drain via app:initial-cwd. With
+// a window already focused, forward to it so a new tab opens at that path.
+app.on("open-file", (event, p) => {
+  event.preventDefault();
+  const cwd = resolveCwd(p);
+  if (!cwd) return;
+  const target =
+    BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null;
+  if (target && !target.isDestroyed()) {
+    target.webContents.send("app:open-cwd", cwd);
+    if (target.isMinimized()) target.restore();
+    target.focus();
+    return;
+  }
+  pendingCwd = cwd;
+  if (app.isReady()) createWindow();
+});
+
+ipcMain.handle("app:initial-cwd", () => {
+  const c = pendingCwd;
+  pendingCwd = null;
+  return c;
+});
+
+app.whenReady().then(() => {
+  // macOS ignores BrowserWindow.icon for the dock; set it explicitly so
+  // dev mode (npm run dev) shows the icon. In a packaged build the
+  // bundled .icns/.ico takes over.
+  if (process.platform === "darwin" && !appIcon.isEmpty()) {
+    app.dock?.setIcon(appIcon);
+  }
+  initPtyHost();
+  buildMenu();
+  createWindow();
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
