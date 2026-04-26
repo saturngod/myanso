@@ -39,6 +39,9 @@ dmg:
   title: Myanso ${version}
 
 win:
+  # PNG works (electron-builder converts on the fly) but produces a fuzzy
+  # icon. For a crisp taskbar/installer icon, generate a multi-size ICO
+  # at build/icon.ico and change this path to "build/icon.ico".
   icon: icon.png
   target: nsis
 

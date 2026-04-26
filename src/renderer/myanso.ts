@@ -680,7 +680,10 @@ class Tab {
     const closeEl = document.createElement("span");
     closeEl.className = "tab-close";
     closeEl.textContent = "×";
-    closeEl.title = "Close tab (⌘W)";
+    closeEl.title =
+      window.pty?.platform === "darwin"
+        ? "Close tab (⌘W)"
+        : "Close tab (Ctrl+Shift+W)";
     this.tabEl.append(this.titleEl, closeEl);
     tabbar.appendChild(this.tabEl);
     this.tabEl.addEventListener("click", (e) => {
@@ -1052,10 +1055,15 @@ class TabManager {
   // Returns false to swallow the event from xterm.
   private handleKey(e: KeyboardEvent, _s: PaneSession): boolean {
     if (e.type !== "keydown") return true;
-    const mod = e.metaKey || e.ctrlKey;
+    // Mac uses Cmd; win/linux use Ctrl. On non-mac we additionally require
+    // Shift for D/T/W because raw Ctrl+D (EOF) and Ctrl+W (delete-word)
+    // are reserved by readline-driven shells.
+    const isMac = window.pty?.platform === "darwin";
+    const mod = isMac ? e.metaKey : e.ctrlKey;
     if (!mod) return true;
+    if (!isMac && e.metaKey) return true;
 
-    // Cmd+Opt+Arrow — pane navigation
+    // Cmd+Opt+Arrow / Ctrl+Alt+Arrow — pane navigation
     if (e.altKey && !e.shiftKey) {
       const dir =
         e.code === "ArrowLeft"
@@ -1074,26 +1082,43 @@ class TabManager {
       }
     }
 
-    // Cmd+D / Cmd+Shift+D — split
-    if (e.code === "KeyD" && !e.altKey) {
-      e.preventDefault();
-      void this.splitActive(e.shiftKey ? "col" : "row");
-      return false;
+    // Split:
+    //   mac:    Cmd+D = split right, Cmd+Shift+D = split down
+    //   win/lin: Ctrl+Shift+D = split right, Ctrl+Shift+E = split down
+    //   (Ctrl+D would steal EOF, so the unshifted form is unavailable.)
+    if (isMac) {
+      if (e.code === "KeyD" && !e.altKey) {
+        e.preventDefault();
+        void this.splitActive(e.shiftKey ? "col" : "row");
+        return false;
+      }
+    } else if (e.shiftKey && !e.altKey) {
+      if (e.code === "KeyD") {
+        e.preventDefault();
+        void this.splitActive("row");
+        return false;
+      }
+      if (e.code === "KeyE") {
+        e.preventDefault();
+        void this.splitActive("col");
+        return false;
+      }
     }
-    // Cmd+T — new tab
-    if (e.code === "KeyT" && !e.shiftKey && !e.altKey) {
+
+    // New tab: Cmd+T (mac) / Ctrl+Shift+T (win/lin)
+    if (e.code === "KeyT" && !e.altKey && (isMac ? !e.shiftKey : e.shiftKey)) {
       e.preventDefault();
       void this.createTab();
       return false;
     }
-    // Cmd+W — close active pane (cascades to tab/window)
-    if (e.code === "KeyW" && !e.shiftKey && !e.altKey) {
+    // Close pane: Cmd+W (mac) / Ctrl+Shift+W (win/lin)
+    if (e.code === "KeyW" && !e.altKey && (isMac ? !e.shiftKey : e.shiftKey)) {
       e.preventDefault();
       const t = this.active;
       if (t) t.closeLeaf(t.active);
       return false;
     }
-    // Cmd+Shift+] / Cmd+Shift+[ — cycle tabs
+    // Cmd+Shift+] / Cmd+Shift+[ — cycle tabs (Shift required on all platforms)
     if (e.shiftKey && e.code === "BracketRight") {
       e.preventDefault();
       this.cycleNext();
@@ -1104,7 +1129,7 @@ class TabManager {
       this.cyclePrev();
       return false;
     }
-    // Cmd+1..9 — tab by index
+    // Cmd+1..9 / Ctrl+1..9 — tab by index
     if (!e.shiftKey && !e.altKey && /^Digit[1-9]$/.test(e.code)) {
       e.preventDefault();
       this.activateByIndex(parseInt(e.code.slice(5), 10) - 1);
@@ -1179,10 +1204,19 @@ newTabBtn.addEventListener("click", () => {
 // Electron 30: File.path is still attached. From Electron 32 it's
 // removed in favor of webUtils.getPathForFile() — switch when we bump.
 function shellEscapePath(p: string): string {
-  // Strip newlines (shell would treat them as Enter). Backslash-escape
-  // anything that's not a "safe" character — matches Terminal.app, which
+  // Strip newlines (shell would treat them as Enter).
+  const stripped = p.replace(/\r?\n/g, "");
+  // On Windows the path separator is "\", which the unix backslash-escape
+  // would mangle (C:\Users → C:\\Users). cmd and PowerShell both accept
+  // double-quoted paths verbatim, and "\"" isn't a legal NTFS filename
+  // character, so plain quote-wrapping is safe. Wrap only when needed so
+  // bare paths (no spaces / metacharacters) round-trip cleanly.
+  if (window.pty?.platform === "win32") {
+    return /[\s"&|<>^`(){}\[\];,]/.test(stripped) ? `"${stripped}"` : stripped;
+  }
+  // mac/linux: backslash-escape unsafe chars — matches Terminal.app, which
   // produces /Users/foo/My\ Folder rather than quoting.
-  return p.replace(/\r?\n/g, "").replace(/[^A-Za-z0-9_\-./]/g, "\\$&");
+  return stripped.replace(/[^A-Za-z0-9_\-./]/g, "\\$&");
 }
 
 function isFileDrag(e: DragEvent): boolean {

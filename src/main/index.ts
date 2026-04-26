@@ -142,12 +142,32 @@ function buildMenu(): void {
             createWindow();
           },
         },
-        shellItem("New Tab", "CmdOrCtrl+T", "new-tab"),
+        // On mac Cmd+T/D/W are safe — readline doesn't see them. On
+        // win/linux Ctrl+D is EOF and Ctrl+W is delete-previous-word, so
+        // we route those actions through Ctrl+Shift to leave the shell's
+        // bindings intact.
+        shellItem(
+          "New Tab",
+          isMac ? "Cmd+T" : "Ctrl+Shift+T",
+          "new-tab",
+        ),
         { type: "separator" },
-        shellItem("Split Right", "CmdOrCtrl+D", "split-row"),
-        shellItem("Split Down", "CmdOrCtrl+Shift+D", "split-col"),
+        shellItem(
+          "Split Right",
+          isMac ? "Cmd+D" : "Ctrl+Shift+D",
+          "split-row",
+        ),
+        shellItem(
+          "Split Down",
+          isMac ? "Cmd+Shift+D" : "Ctrl+Shift+E",
+          "split-col",
+        ),
         { type: "separator" },
-        shellItem("Close Pane", "CmdOrCtrl+W", "close-pane"),
+        shellItem(
+          "Close Pane",
+          isMac ? "Cmd+W" : "Ctrl+Shift+W",
+          "close-pane",
+        ),
       ],
     },
     {

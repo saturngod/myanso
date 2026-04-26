@@ -8,6 +8,24 @@
         />
         <title>Myanso</title>
         <style>
+            /* Bundled Noto Sans Myanmar — ships with the app so Myanmar
+               glyphs render correctly on Windows/Linux where no Myanmar
+               font is preinstalled. (OFL 1.1, see fonts/OFL.txt.) */
+            @font-face {
+                font-family: "Noto Sans Myanmar";
+                font-style: normal;
+                font-weight: 400;
+                font-display: swap;
+                src: url("./fonts/NotoSansMyanmar-Regular.ttf")
+                    format("truetype");
+            }
+            @font-face {
+                font-family: "Noto Sans Myanmar";
+                font-style: normal;
+                font-weight: 700;
+                font-display: swap;
+                src: url("./fonts/NotoSansMyanmar-Bold.ttf") format("truetype");
+            }
             :root {
                 color-scheme: dark;
                 --bg: #15171e;
@@ -280,7 +298,7 @@
     <body>
         <div id="chrome">
             <div id="tabbar"></div>
-            <button id="new-tab" title="New tab (⌘T)">+</button>
+            <button id="new-tab" title="New tab">+</button>
         </div>
         <div id="terminal-wrapper"></div>
         <script type="module" src="./myanso.ts"></script>

@@ -2,9 +2,27 @@ import { ipcMain, WebContents } from "electron";
 import { spawn as spawnPty, IPty } from "node-pty";
 import os from "node:os";
 
-const USER_SHELL =
-  process.env.SHELL ||
-  (process.platform === "win32" ? "powershell.exe" : "/bin/zsh");
+// $SHELL is unset on Windows and inside some Linux desktop launchers, so
+// fall back per platform: zsh is the macOS default since Catalina; bash
+// is universal on Linux; PowerShell on Windows.
+function defaultShell(): string {
+  if (process.platform === "win32") return "powershell.exe";
+  if (process.platform === "darwin") return "/bin/zsh";
+  return "/bin/bash";
+}
+
+// `npm run` clobbers SHELL with its non-interactive script-shell (default
+// /bin/sh), so during `npm run dev` we'd otherwise launch /bin/sh — bash
+// in disguise on macOS — instead of the user's login shell. Treat any
+// .../sh as "no real shell set" and use the platform default. A user with
+// fish/elvish at SHELL=/usr/local/bin/fish still gets honored.
+function resolveShell(): string {
+  const s = process.env.SHELL;
+  if (s && !/\/sh$/.test(s)) return s;
+  return defaultShell();
+}
+
+const USER_SHELL = resolveShell();
 
 interface Session {
   pty: IPty;
