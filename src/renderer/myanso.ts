@@ -195,7 +195,7 @@ class PaneSession {
     // ◌ိ / ◌ီ and below-base ◌ု / ◌ူ; 1.35 works but adds airy leading.
     this.term = new Terminal({
       fontFamily:
-        'Menlo, "SF Mono", Monaco, "Noto Sans Myanmar", "Myanmar Sangam MN", "Myanmar MN", monospace',
+        'Menlo, "SF Mono", Monaco, Consolas, "Cascadia Mono", "DejaVu Sans Mono", "Liberation Mono", "Ubuntu Mono", "Noto Sans Mono", "Noto Sans Myanmar", "Myanmar Sangam MN", "Myanmar MN", monospace',
       fontSize: 14,
       lineHeight: 1.25,
       cursorBlink: false,
