@@ -21,10 +21,14 @@ jobs:
             runner: macos-14
             args: --mac --arm64
             artifact: myanso-macos-arm64
-          - name: Linux (AppImage)
+          - name: Linux x64 (AppImage)
             runner: ubuntu-latest
-            args: --linux AppImage
-            artifact: myanso-linux-appimage
+            args: --linux AppImage --x64
+            artifact: myanso-linux-x64-appimage
+          - name: Linux arm64 (AppImage)
+            runner: ubuntu-24.04-arm
+            args: --linux AppImage --arm64
+            artifact: myanso-linux-arm64-appimage
           - name: Windows (NSIS)
             runner: windows-latest
             args: --win nsis
@@ -47,7 +51,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Linux build deps
-        if: matrix.platform.runner == 'ubuntu-latest'
+        if: startsWith(matrix.platform.runner, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential
