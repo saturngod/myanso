@@ -335,6 +335,7 @@ class PaneSession {
   private ro: ResizeObserver | null = null;
   private disposers: Array<() => void> = [];
   private active = false;
+  private usingAltScreen = false;
 
   constructor(private readonly opts: PaneSessionOpts) {
     this.ptyId = opts.ptyId;
@@ -381,6 +382,22 @@ class PaneSession {
     };
     this.term.parser.registerOscHandler(0, onOscTitle);
     this.term.parser.registerOscHandler(2, onOscTitle);
+    const onAltScreen = (enabled: boolean) => {
+      this.usingAltScreen = enabled;
+      this.leafEl.classList.toggle("alt-screen", enabled);
+    };
+    this.term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
+      if (params.some((p) => p === 47 || p === 1047 || p === 1049)) {
+        onAltScreen(true);
+      }
+      return false;
+    });
+    this.term.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
+      if (params.some((p) => p === 47 || p === 1047 || p === 1049)) {
+        onAltScreen(false);
+      }
+      return false;
+    });
     this.applyAppearance(appearance);
   }
 
@@ -499,6 +516,7 @@ class PaneSession {
     requestAnimationFrame(() => {
       this.renderScheduled = false;
       if (document.hidden) return;
+      if (this.usingAltScreen) return;
       if (!this.active) return;
       this.renderBuffer();
     });
@@ -549,11 +567,12 @@ class PaneSession {
       }
     )._core?._renderService?.dimensions?.css?.cell?.height;
     if (cellH && cellH > 0) {
-      // Round to integer pixel — fractional heights leave 1-px row seams
-      // visible as horizontal stripes in solid-bg apps (htop, vim).
+      // Always round up. Rounding to nearest can still round a fractional
+      // cell down, which leaves a 1px seam between mirrored rows and shows
+      // up as horizontal stripes in solid-background TUIs like vim/netrw.
       document.documentElement.style.setProperty(
         "--cell-h",
-        `${Math.round(cellH)}px`,
+        `${Math.ceil(cellH)}px`,
       );
     }
   }
