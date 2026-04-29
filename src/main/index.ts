@@ -173,6 +173,8 @@ function buildMenu(): void {
     {
       label: "View",
       submenu: [
+        shellItem("Settings", "CmdOrCtrl+,", "open-settings"),
+        { type: "separator" },
         ...(isDev
           ? ([
               { role: "reload" },

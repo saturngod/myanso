@@ -7,7 +7,33 @@ import "@xterm/xterm/css/xterm.css";
 // ---- Chrome DOM ------------------------------------------------------
 const tabbar = document.getElementById("tabbar") as HTMLDivElement;
 const newTabBtn = document.getElementById("new-tab") as HTMLButtonElement;
+const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
 const wrapper = document.getElementById("terminal-wrapper") as HTMLDivElement;
+const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
+const settingsCloseBtn = document.getElementById(
+  "settings-close",
+) as HTMLButtonElement;
+const settingsViewMode = document.getElementById(
+  "settings-view-mode",
+) as HTMLSelectElement;
+const settingsFontSize = document.getElementById(
+  "settings-font-size",
+) as HTMLInputElement;
+const settingsFontSizeValue = document.getElementById(
+  "settings-font-size-value",
+) as HTMLInputElement;
+const settingsFontFamily = document.getElementById(
+  "settings-font-family",
+) as HTMLSelectElement;
+const settingsFontFamilyNote = document.getElementById(
+  "settings-font-family-note",
+) as HTMLDivElement;
+const settingsCustomFont = document.getElementById(
+  "settings-custom-font",
+) as HTMLInputElement;
+const settingsResetBtn = document.getElementById(
+  "settings-reset",
+) as HTMLButtonElement;
 
 // Mouse wheels emit deltaY; the tabbar only scrolls on the X axis. Without
 // this, a regular wheel does nothing over an overflowing tab strip — only
@@ -128,6 +154,140 @@ function applyMyanmarWidth(term: Terminal): void {
   }
 }
 
+const SETTINGS_KEY = "myanso:appearance";
+const FALLBACK_MONO_FONTS = [
+  "Menlo",
+  "SF Mono",
+  "Monaco",
+  "Consolas",
+  "Cascadia Mono",
+  "DejaVu Sans Mono",
+  "Liberation Mono",
+  "Ubuntu Mono",
+  "Noto Sans Mono",
+];
+const MYANMAR_FALLBACK_FONTS = [
+  "Noto Sans Myanmar",
+  "Myanmar Sangam MN",
+  "Myanmar MN",
+];
+const FONT_CHOICES = [
+  { value: "system", label: "System Mono" },
+  { value: "JetBrains Mono", label: "JetBrains Mono" },
+  { value: "Fira Mono", label: "Fira Mono" },
+  { value: "Fira Code", label: "Fira Code" },
+  { value: "Cascadia Mono", label: "Cascadia Mono" },
+  { value: "Consolas", label: "Consolas" },
+  { value: "Menlo", label: "Menlo" },
+  { value: "Monaco", label: "Monaco" },
+  { value: "DejaVu Sans Mono", label: "DejaVu Sans Mono" },
+  { value: "Ubuntu Mono", label: "Ubuntu Mono" },
+  { value: "Liberation Mono", label: "Liberation Mono" },
+] as const;
+const VIEW_MODE_LINE_HEIGHT = {
+  compact: 1.15,
+  default: 1.25,
+  presentation: 1.4,
+} as const;
+type ViewMode = keyof typeof VIEW_MODE_LINE_HEIGHT;
+type FontChoice = (typeof FONT_CHOICES)[number]["value"] | "custom";
+interface AppearancePrefs {
+  viewMode: ViewMode;
+  fontSize: number;
+  fontFamily: string;
+}
+
+const DEFAULT_APPEARANCE: AppearancePrefs = {
+  viewMode: "default",
+  fontSize: 14,
+  fontFamily: "system",
+};
+
+function clampFontSize(n: number): number {
+  return Math.max(11, Math.min(24, Math.round(n || DEFAULT_APPEARANCE.fontSize)));
+}
+
+function isViewMode(v: unknown): v is ViewMode {
+  return v === "compact" || v === "default" || v === "presentation";
+}
+
+function normalizeFontChoice(v: unknown): string {
+  if (typeof v !== "string") return DEFAULT_APPEARANCE.fontFamily;
+  const trimmed = v.trim();
+  return trimmed || DEFAULT_APPEARANCE.fontFamily;
+}
+
+function normalizeAppearance(raw: unknown): AppearancePrefs {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_APPEARANCE };
+  const obj = raw as Partial<AppearancePrefs>;
+  return {
+    viewMode: isViewMode(obj.viewMode) ? obj.viewMode : DEFAULT_APPEARANCE.viewMode,
+    fontSize: clampFontSize(Number(obj.fontSize)),
+    fontFamily: normalizeFontChoice(obj.fontFamily),
+  };
+}
+
+function loadAppearance(): AppearancePrefs {
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_KEY);
+    return raw ? normalizeAppearance(JSON.parse(raw)) : { ...DEFAULT_APPEARANCE };
+  } catch {
+    return { ...DEFAULT_APPEARANCE };
+  }
+}
+
+function saveAppearance(prefs: AppearancePrefs): void {
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(prefs));
+  } catch {
+    /* */
+  }
+}
+
+let appearance = loadAppearance();
+
+function quoteFontFamily(name: string): string {
+  return /[",]/.test(name) || /\s/.test(name) ? `"${name.replace(/"/g, '\\"')}"` : name;
+}
+
+function buildTerminalFontFamily(selected: string): string {
+  const families: string[] = [];
+  const seen = new Set<string>();
+  const push = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    families.push(trimmed);
+  };
+
+  if (selected !== "system") push(selected);
+  for (const name of FALLBACK_MONO_FONTS) push(name);
+  for (const name of MYANMAR_FALLBACK_FONTS) push(name);
+  push("monospace");
+
+  return families
+    .map((name) => (name === "monospace" ? name : quoteFontFamily(name)))
+    .join(", ");
+}
+
+function isFontAvailable(name: string): boolean {
+  try {
+    return document.fonts.check(`14px ${quoteFontFamily(name)}`);
+  } catch {
+    return false;
+  }
+}
+
+function availableFontChoices(): Array<{ value: FontChoice; label: string }> {
+  return FONT_CHOICES.filter((font) =>
+    font.value === "system" ? true : isFontAvailable(font.value),
+  );
+}
+
+function fontChoiceForValue(value: string): FontChoice {
+  return FONT_CHOICES.some((font) => font.value === value) ? (value as FontChoice) : "custom";
+}
+
 const home = window.pty?.homeDir || "";
 function prettyPath(raw: string): string {
   try {
@@ -194,10 +354,9 @@ class PaneSession {
     // Tighter values (1.0 = 16 px) clip Burmese above-base marks like
     // ◌ိ / ◌ီ and below-base ◌ု / ◌ူ; 1.35 works but adds airy leading.
     this.term = new Terminal({
-      fontFamily:
-        'Menlo, "SF Mono", Monaco, Consolas, "Cascadia Mono", "DejaVu Sans Mono", "Liberation Mono", "Ubuntu Mono", "Noto Sans Mono", "Noto Sans Myanmar", "Myanmar Sangam MN", "Myanmar MN", monospace',
-      fontSize: 14,
-      lineHeight: 1.25,
+      fontFamily: buildTerminalFontFamily(appearance.fontFamily),
+      fontSize: appearance.fontSize,
+      lineHeight: VIEW_MODE_LINE_HEIGHT[appearance.viewMode],
       cursorBlink: false,
       scrollback: 5000,
       allowProposedApi: true,
@@ -222,6 +381,7 @@ class PaneSession {
     };
     this.term.parser.registerOscHandler(0, onOscTitle);
     this.term.parser.registerOscHandler(2, onOscTitle);
+    this.applyAppearance(appearance);
   }
 
   // Two-phase init: caller places leafEl in the DOM, then calls attach().
@@ -253,34 +413,7 @@ class PaneSession {
   // all change the leaf's bounds, all funnel through here.
   private setupResize(): void {
     if (this.ro) return;
-    const doFit = () => {
-      if (!this.active) return;
-      try {
-        this.fit.fit();
-      } catch {
-        return;
-      }
-      const { cols, rows } = this.term;
-      window.pty?.resize(this.ptyId, cols, rows);
-      const cellH = (
-        this.term as unknown as {
-          _core: {
-            _renderService?: {
-              dimensions?: { css?: { cell?: { height: number } } };
-            };
-          };
-        }
-      )._core?._renderService?.dimensions?.css?.cell?.height;
-      if (cellH && cellH > 0) {
-        // Round to integer pixel — fractional heights leave 1-px row seams
-        // visible as horizontal stripes in solid-bg apps (htop, vim).
-        document.documentElement.style.setProperty(
-          "--cell-h",
-          `${Math.round(cellH)}px`,
-        );
-      }
-    };
-    this.ro = new ResizeObserver(doFit);
+    this.ro = new ResizeObserver(() => this.fitAndResize());
     this.ro.observe(this.leafEl);
   }
 
@@ -288,13 +421,7 @@ class PaneSession {
     if (this.active) return;
     this.active = true;
     this.setupResize();
-    try {
-      this.fit.fit();
-    } catch {
-      /* container may be 0×0 still; RO will retry */
-    }
-    const { cols, rows } = this.term;
-    window.pty?.resize(this.ptyId, cols, rows);
+    this.fitAndResize();
     if (this.safetyTimer == null) {
       this.safetyTimer = window.setInterval(() => this.scheduleRender(), 500);
     }
@@ -338,6 +465,20 @@ class PaneSession {
 
   writeToTerm(data: string): void {
     this.term.write(data);
+  }
+
+  applyAppearance(prefs: AppearancePrefs): void {
+    const fontFamily = buildTerminalFontFamily(prefs.fontFamily);
+    this.leafEl.style.fontFamily = fontFamily;
+    this.leafEl.style.fontSize = `${prefs.fontSize}px`;
+    this.term.options.fontFamily = fontFamily;
+    this.term.options.fontSize = prefs.fontSize;
+    this.term.options.lineHeight = VIEW_MODE_LINE_HEIGHT[prefs.viewMode];
+    if (!this.active) return;
+    requestAnimationFrame(() => {
+      this.fitAndResize();
+      this.scheduleRender();
+    });
   }
 
   setDimStyle(on: boolean): void {
@@ -386,6 +527,34 @@ class PaneSession {
       const d = this.rowDivs.pop()!;
       this.lastRowHtml.pop();
       this.outputDiv.removeChild(d);
+    }
+  }
+
+  private fitAndResize(): void {
+    if (!this.active) return;
+    try {
+      this.fit.fit();
+    } catch {
+      return;
+    }
+    const { cols, rows } = this.term;
+    window.pty?.resize(this.ptyId, cols, rows);
+    const cellH = (
+      this.term as unknown as {
+        _core: {
+          _renderService?: {
+            dimensions?: { css?: { cell?: { height: number } } };
+          };
+        };
+      }
+    )._core?._renderService?.dimensions?.css?.cell?.height;
+    if (cellH && cellH > 0) {
+      // Round to integer pixel — fractional heights leave 1-px row seams
+      // visible as horizontal stripes in solid-bg apps (htop, vim).
+      document.documentElement.style.setProperty(
+        "--cell-h",
+        `${Math.round(cellH)}px`,
+      );
     }
   }
 
@@ -1052,6 +1221,14 @@ class TabManager {
     return null;
   }
 
+  applyAppearance(prefs: AppearancePrefs): void {
+    for (const tab of this.tabs.values()) {
+      for (const leaf of paneLeaves(tab.root)) {
+        leaf.session.applyAppearance(prefs);
+      }
+    }
+  }
+
   // Returns false to swallow the event from xterm.
   private handleKey(e: KeyboardEvent, _s: PaneSession): boolean {
     if (e.type !== "keydown") return true;
@@ -1172,6 +1349,63 @@ window.pty?.onFullscreen((on) => {
 
 const tabs = new TabManager();
 
+function syncFontChoicesUi(selected: string): void {
+  const choices = availableFontChoices();
+  settingsFontFamily.innerHTML = "";
+  for (const choice of choices) {
+    const option = document.createElement("option");
+    option.value = choice.value;
+    option.textContent = choice.label;
+    settingsFontFamily.appendChild(option);
+  }
+
+  const choice = fontChoiceForValue(selected);
+  if (choice === "custom") {
+    const customOption = document.createElement("option");
+    customOption.value = "custom";
+    customOption.textContent = "Custom local font";
+    settingsFontFamily.appendChild(customOption);
+    settingsFontFamily.value = "custom";
+    settingsCustomFont.value = selected === "system" ? "" : selected;
+  } else {
+    settingsFontFamily.value = choice;
+    settingsCustomFont.value = "";
+  }
+
+  const installed = Math.max(0, choices.length - 1);
+  settingsFontFamilyNote.textContent =
+    installed > 0
+      ? `${installed} installed monospace fonts detected on this machine.`
+      : "No known optional monospace fonts detected. You can still type a local font name below.";
+}
+
+function syncSettingsUi(prefs: AppearancePrefs): void {
+  settingsViewMode.value = prefs.viewMode;
+  settingsFontSize.value = String(prefs.fontSize);
+  settingsFontSizeValue.value = String(prefs.fontSize);
+  syncFontChoicesUi(prefs.fontFamily);
+}
+
+function applyAppearancePrefs(next: AppearancePrefs): void {
+  appearance = normalizeAppearance(next);
+  saveAppearance(appearance);
+  syncSettingsUi(appearance);
+  tabs.applyAppearance(appearance);
+}
+
+function openSettings(): void {
+  syncSettingsUi(appearance);
+  settingsModal.hidden = false;
+  settingsViewMode.focus();
+}
+
+function closeSettings(): void {
+  settingsModal.hidden = true;
+  settingsBtn.focus();
+}
+
+syncSettingsUi(appearance);
+
 if (!window.pty) {
   const fallback = document.createElement("div");
   fallback.style.cssText =
@@ -1194,6 +1428,65 @@ if (!window.pty) {
 
 newTabBtn.addEventListener("click", () => {
   void tabs.createTab();
+});
+settingsBtn.addEventListener("click", () => openSettings());
+settingsCloseBtn.addEventListener("click", () => closeSettings());
+settingsModal.addEventListener("click", (e) => {
+  if (e.target === settingsModal) closeSettings();
+});
+settingsViewMode.addEventListener("change", () => {
+  applyAppearancePrefs({
+    ...appearance,
+    viewMode: normalizeAppearance({
+      ...appearance,
+      viewMode: settingsViewMode.value,
+    }).viewMode,
+  });
+});
+settingsFontSize.addEventListener("input", () => {
+  applyAppearancePrefs({
+    ...appearance,
+    fontSize: Number(settingsFontSize.value),
+  });
+});
+settingsFontSizeValue.addEventListener("input", () => {
+  applyAppearancePrefs({
+    ...appearance,
+    fontSize: Number(settingsFontSizeValue.value),
+  });
+});
+settingsFontFamily.addEventListener("change", () => {
+  if (settingsFontFamily.value === "custom") {
+    settingsCustomFont.focus();
+    return;
+  }
+  applyAppearancePrefs({
+    ...appearance,
+    fontFamily: settingsFontFamily.value,
+  });
+});
+settingsCustomFont.addEventListener("change", () => {
+  const next = settingsCustomFont.value.trim();
+  if (!next) {
+    applyAppearancePrefs({
+      ...appearance,
+      fontFamily: "system",
+    });
+    return;
+  }
+  applyAppearancePrefs({
+    ...appearance,
+    fontFamily: next,
+  });
+});
+settingsResetBtn.addEventListener("click", () => {
+  applyAppearancePrefs({ ...DEFAULT_APPEARANCE });
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !settingsModal.hidden) {
+    e.preventDefault();
+    closeSettings();
+  }
 });
 
 // Drag-and-drop file/folder onto the terminal area pastes its absolute
@@ -1260,5 +1553,6 @@ window.pty?.onMenu((action) => {
     case "split-row":  void tabs.splitActive("row"); break;
     case "split-col":  void tabs.splitActive("col"); break;
     case "close-pane": tabs.closeActivePane(); break;
+    case "open-settings": openSettings(); break;
   }
 });

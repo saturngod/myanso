@@ -161,6 +161,22 @@
                 color: var(--fg);
                 background: rgba(255, 255, 255, 0.06);
             }
+            #settings-btn {
+                align-self: center;
+                background: transparent;
+                color: var(--muted);
+                border: none;
+                cursor: pointer;
+                font-size: 14px;
+                line-height: 1;
+                padding: 4px 10px;
+                border-radius: 4px;
+                -webkit-app-region: no-drag;
+            }
+            #settings-btn:hover {
+                color: var(--fg);
+                background: rgba(255, 255, 255, 0.06);
+            }
 
             #terminal-wrapper {
                 position: absolute;
@@ -295,14 +311,174 @@
             .cursor.blink {
                 animation: blink 1.06s step-end infinite;
             }
+
+            #settings-modal[hidden] {
+                display: none;
+            }
+            #settings-modal {
+                position: fixed;
+                inset: 0;
+                background: rgba(8, 10, 14, 0.66);
+                display: grid;
+                place-items: center;
+                z-index: 200;
+            }
+            .settings-panel {
+                width: min(460px, calc(100vw - 32px));
+                background: linear-gradient(180deg, #1d2029 0%, #15171e 100%);
+                border: 1px solid var(--border);
+                border-radius: 14px;
+                box-shadow: 0 28px 60px rgba(0, 0, 0, 0.45);
+                padding: 18px;
+            }
+            .settings-head {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 14px;
+            }
+            .settings-head h2 {
+                font:
+                    600 16px/1.2 -apple-system, BlinkMacSystemFont,
+                    "SF Pro Text", system-ui, sans-serif;
+            }
+            .settings-close {
+                border: none;
+                background: transparent;
+                color: var(--muted);
+                font-size: 18px;
+                line-height: 1;
+                cursor: pointer;
+                padding: 2px 6px;
+                border-radius: 4px;
+            }
+            .settings-close:hover {
+                color: var(--fg);
+                background: rgba(255, 255, 255, 0.08);
+            }
+            .settings-copy {
+                color: var(--muted);
+                font-size: 12px;
+                margin-bottom: 16px;
+            }
+            .settings-group {
+                display: grid;
+                gap: 12px;
+            }
+            .setting-row {
+                display: grid;
+                gap: 6px;
+            }
+            .setting-row label {
+                font-size: 12px;
+                color: var(--muted);
+            }
+            .setting-row select,
+            .setting-row input {
+                width: 100%;
+                background: rgba(255, 255, 255, 0.04);
+                color: var(--fg);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 9px 10px;
+                font: inherit;
+            }
+            .setting-inline {
+                display: grid;
+                grid-template-columns: 1fr 88px;
+                gap: 10px;
+                align-items: center;
+            }
+            .setting-note {
+                color: var(--muted);
+                font-size: 11px;
+                line-height: 1.4;
+            }
+            .settings-foot {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-top: 18px;
+            }
+            .settings-hint {
+                color: var(--muted);
+                font-size: 12px;
+            }
+            .settings-reset {
+                border: 1px solid var(--border);
+                background: rgba(255, 255, 255, 0.04);
+                color: var(--fg);
+                border-radius: 8px;
+                padding: 8px 12px;
+                cursor: pointer;
+            }
+            .settings-reset:hover {
+                background: rgba(255, 255, 255, 0.08);
+            }
         </style>
     </head>
     <body>
         <div id="chrome">
             <div id="tabbar"></div>
             <button id="new-tab" title="New tab">+</button>
+            <button id="settings-btn" title="Settings">Aa</button>
         </div>
         <div id="terminal-wrapper"></div>
+        <div id="settings-modal" hidden>
+            <div
+                class="settings-panel"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="settings-title"
+            >
+                <div class="settings-head">
+                    <h2 id="settings-title">Settings</h2>
+                    <button class="settings-close" id="settings-close" aria-label="Close settings">×</button>
+                </div>
+                <p class="settings-copy">
+                    Adjust how terminal text is displayed. Changes apply to all tabs and panes.
+                </p>
+                <div class="settings-group">
+                    <div class="setting-row">
+                        <label for="settings-view-mode">View mode</label>
+                        <select id="settings-view-mode">
+                            <option value="compact">Compact</option>
+                            <option value="default">Default</option>
+                            <option value="presentation">Presentation</option>
+                        </select>
+                    </div>
+                    <div class="setting-row">
+                        <label for="settings-font-size">Font size</label>
+                        <div class="setting-inline">
+                            <input id="settings-font-size" type="range" min="11" max="24" step="1" />
+                            <input id="settings-font-size-value" type="number" min="11" max="24" step="1" />
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <label for="settings-font-family">Font family</label>
+                        <select id="settings-font-family"></select>
+                        <div class="setting-note" id="settings-font-family-note">
+                            Installed monospace fonts detected on this machine appear here.
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <label for="settings-custom-font">Custom local font name</label>
+                        <input
+                            id="settings-custom-font"
+                            type="text"
+                            placeholder='Example: "JetBrains Mono"'
+                        />
+                        <div class="setting-note">
+                            Enter any installed font family name. Myanmar fallbacks stay enabled automatically.
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-foot">
+                    <span class="settings-hint">Stored locally on this machine.</span>
+                    <button class="settings-reset" id="settings-reset">Reset</button>
+                </div>
+            </div>
+        </div>
         <script type="module" src="./myanso.ts"></script>
     </body>
 </html>
