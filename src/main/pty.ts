@@ -28,6 +28,7 @@ interface Session {
   pty: IPty;
   buf: string;
   scheduled: boolean;
+  flushTimer: NodeJS.Timeout | null;
   ready: boolean;
   wc: WebContents;
 }
@@ -40,20 +41,33 @@ const sessions = new Map<string, Session>();
 let nextId = 1;
 let initialized = false;
 
+const FLUSH_INTERVAL_MS = 8;
+const MAX_BUFFERED_CHARS = 64 * 1024;
+
+function flush(id: string, s: Session): void {
+  if (s.flushTimer) {
+    clearTimeout(s.flushTimer);
+    s.flushTimer = null;
+  }
+  s.scheduled = false;
+  if (!s.buf) return;
+  if (s.wc.isDestroyed()) {
+    s.buf = "";
+    return;
+  }
+  const out = s.buf;
+  s.buf = "";
+  s.wc.send("pty:data", id, out);
+}
+
 function schedule(id: string, s: Session): void {
+  if (s.buf.length >= MAX_BUFFERED_CHARS) {
+    flush(id, s);
+    return;
+  }
   if (s.scheduled) return;
   s.scheduled = true;
-  setImmediate(() => {
-    s.scheduled = false;
-    if (!s.buf) return;
-    if (s.wc.isDestroyed()) {
-      s.buf = "";
-      return;
-    }
-    const out = s.buf;
-    s.buf = "";
-    s.wc.send("pty:data", id, out);
-  });
+  s.flushTimer = setTimeout(() => flush(id, s), FLUSH_INTERVAL_MS);
 }
 
 function createSession(wc: WebContents, cwd?: string): string {
@@ -72,7 +86,14 @@ function createSession(wc: WebContents, cwd?: string): string {
     env: env as { [k: string]: string },
   });
 
-  const s: Session = { pty, buf: "", scheduled: false, ready: false, wc };
+  const s: Session = {
+    pty,
+    buf: "",
+    scheduled: false,
+    flushTimer: null,
+    ready: false,
+    wc,
+  };
   sessions.set(id, s);
 
   pty.onData((data) => {
@@ -81,6 +102,7 @@ function createSession(wc: WebContents, cwd?: string): string {
     if (s.ready) schedule(id, s);
   });
   pty.onExit(({ exitCode }) => {
+    if (s.ready) flush(id, s);
     sessions.delete(id);
     if (!wc.isDestroyed()) wc.send("pty:exit", id, exitCode);
   });
@@ -137,6 +159,7 @@ export function initPtyHost(): void {
     } catch {
       /* already gone */
     }
+    if (s.flushTimer) clearTimeout(s.flushTimer);
     sessions.delete(id);
   });
 }
@@ -152,6 +175,7 @@ export function killSessionsFor(wc: WebContents): void {
     } catch {
       /* */
     }
+    if (s.flushTimer) clearTimeout(s.flushTimer);
     sessions.delete(id);
   }
 }
