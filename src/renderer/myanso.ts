@@ -155,6 +155,12 @@ interface PaneSessionOpts {
   onKey(e: KeyboardEvent, s: PaneSession): boolean;
 }
 
+function currentSelectionText(): string {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed) return "";
+  return sel.toString().replace(/\u00a0/g, " ");
+}
+
 class PaneSession {
   readonly ptyId: string;
   readonly leafEl: HTMLDivElement;
@@ -199,6 +205,17 @@ class PaneSession {
     this.outputDiv = document.createElement("div");
     this.outputDiv.className = "output";
     this.leafEl.appendChild(this.outputDiv);
+    this.outputDiv.addEventListener("mousedown", (e) => {
+      if (e.button === 0) this.opts.onFocus(this);
+    });
+    this.outputDiv.addEventListener("click", () => {
+      if (!currentSelectionText()) this.focus();
+    });
+    this.outputDiv.addEventListener("contextmenu", (e) => {
+      this.opts.onFocus(this);
+      e.preventDefault();
+      void window.pty?.showContextMenu({ canCopy: !!currentSelectionText() });
+    });
 
     // lineHeight 1.25 → 20 px cell (integer, tiles cleanly, no row seams).
     // Tighter values (1.0 = 16 px) clip Burmese above-base marks like
@@ -969,6 +986,14 @@ class TabManager {
       if (!owner || !leaf) return;
       owner.closeLeaf(leaf);
     });
+    document.addEventListener(
+      "keydown",
+      (e) => {
+        if (!this.handleClipboardShortcut(e)) return;
+        e.stopImmediatePropagation();
+      },
+      true,
+    );
   }
 
   private registerLeaf(tab: Tab, leaf: Leaf): void {
@@ -1153,6 +1178,8 @@ class TabManager {
     if (!mod) return true;
     if (!isMac && e.metaKey) return true;
 
+    if (this.handleClipboardShortcut(e)) return false;
+
     // Cmd+Opt+Arrow / Ctrl+Alt+Arrow — pane navigation
     if (e.altKey && !e.shiftKey) {
       const dir =
@@ -1227,6 +1254,31 @@ class TabManager {
     return true;
   }
 
+  private handleClipboardShortcut(e: KeyboardEvent): boolean {
+    if (e.type !== "keydown") return false;
+    if (e.altKey || e.shiftKey) return false;
+    const isMac = window.pty?.platform === "darwin";
+    const mod = isMac ? e.metaKey : e.ctrlKey;
+    if (!mod || (!isMac && e.metaKey)) return false;
+
+    if (e.code === "KeyC") {
+      if (!currentSelectionText()) {
+        if (!isMac) return false;
+        e.preventDefault();
+        return true;
+      }
+      e.preventDefault();
+      void this.copySelection();
+      return true;
+    }
+    if (e.code === "KeyV") {
+      e.preventDefault();
+      void this.pasteToActive();
+      return true;
+    }
+    return false;
+  }
+
   closeActivePane(): void {
     const t = this.active;
     if (!t) return;
@@ -1244,6 +1296,23 @@ class TabManager {
     const t = this.active;
     if (!t) return;
     window.pty?.write(t.active.session.ptyId, data);
+    t.focusActive();
+  }
+
+  async copySelection(): Promise<boolean> {
+    const text = currentSelectionText();
+    if (!text) return false;
+    await window.pty?.writeClipboardText(text);
+    this.active?.focusActive();
+    return true;
+  }
+
+  async pasteToActive(): Promise<void> {
+    const text = await window.pty?.readClipboardText();
+    if (!text) return;
+    const t = this.active;
+    if (!t) return;
+    t.active.session.term.paste(text);
     t.focusActive();
   }
 }
@@ -1355,5 +1424,14 @@ window.pty?.onMenu((action) => {
     case "split-row":  void tabs.splitActive("row"); break;
     case "split-col":  void tabs.splitActive("col"); break;
     case "close-pane": tabs.closeActivePane(); break;
+    case "copy":       void tabs.copySelection(); break;
+    case "paste":      void tabs.pasteToActive(); break;
+  }
+});
+
+window.pty?.onContextAction((action) => {
+  switch (action) {
+    case "copy":  void tabs.copySelection(); break;
+    case "paste": void tabs.pasteToActive(); break;
   }
 });

@@ -251,6 +251,7 @@
                 inset: 0;
                 opacity: 0;
                 z-index: 10;
+                pointer-events: none;
             }
 
             /* THE FACE: HTML mirror of the brain's cell buffer, one per
@@ -263,7 +264,14 @@
                 white-space: pre;
                 outline: none;
                 z-index: 1;
-                pointer-events: none;
+                pointer-events: auto;
+                cursor: text;
+                user-select: text;
+            }
+            .output::selection,
+            .output *::selection {
+                background: rgba(124, 156, 250, 0.45);
+                color: inherit;
             }
             .line {
                 height: var(--cell-h, 1.35em);
