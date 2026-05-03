@@ -103,10 +103,14 @@ const isMyanmarMc = (cp: number): boolean =>
   cp === 0x108f ||
   (cp >= 0x109a && cp <= 0x109c);
 
-function applyMyanmarWidth(term: Terminal): void {
+function applyMyanmarWidth(
+  term: Terminal,
+  opts: { collapseSpacingMarks: boolean },
+): void {
   try {
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
+    if (!opts.collapseSpacingMarks) return;
     const v11 = (
       term as unknown as {
         _core: {
@@ -232,7 +236,12 @@ class PaneSession {
     });
     this.fit = new FitAddon();
     this.term.loadAddon(this.fit);
-    applyMyanmarWidth(this.term);
+    // Ubuntu bash/readline uses the host wcwidth table while editing the
+    // prompt. There Myanmar spacing marks are one cell, so collapsing them
+    // in xterm makes cursor-left redisplay paint into the prompt.
+    applyMyanmarWidth(this.term, {
+      collapseSpacingMarks: window.pty?.platform !== "linux",
+    });
     this.term.loadAddon(new WebLinksAddon());
 
     this.term.attachCustomKeyEventHandler((e) => this.opts.onKey(e, this));
