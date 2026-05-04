@@ -1,5 +1,13 @@
 export {};
 
+type TerminalContextAction =
+  | "copy"
+  | "paste"
+  | "split-left"
+  | "split-right"
+  | "split-bottom"
+  | "split-up";
+
 declare global {
   interface Window {
     pty: {
@@ -19,7 +27,7 @@ declare global {
       readClipboardText(): Promise<string>;
       writeClipboardText(text: string): Promise<void>;
       showContextMenu(opts: { canCopy: boolean }): Promise<void>;
-      onContextAction(cb: (action: "copy" | "paste") => void): () => void;
+      onContextAction(cb: (action: TerminalContextAction) => void): () => void;
     };
   }
 }

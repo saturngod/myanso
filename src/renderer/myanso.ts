@@ -661,6 +661,8 @@ class PaneSession {
 // or a Branch (two children with a draggable divider between them).
 // dir="row" → side-by-side (vertical divider, Cmd+D in iTerm parlance).
 // dir="col" → stacked (horizontal divider, Cmd+Shift+D).
+type SplitAxis = "row" | "col";
+type SplitPlacement = "before" | "after";
 
 interface Leaf {
   kind: "leaf";
@@ -669,7 +671,7 @@ interface Leaf {
 }
 interface Branch {
   kind: "branch";
-  dir: "row" | "col";
+  dir: SplitAxis;
   ratio: number;
   a: Pane;
   b: Pane;
@@ -703,30 +705,38 @@ function applyBranchSizing(branch: Branch): void {
   paneEl(branch.b).style.flex = `1 1 ${bPct}%`;
 }
 
-// Splits `leaf` along `dir`. The new session takes the second slot.
+// Splits `leaf` along `dir`. `placement` controls which side of the active
+// leaf receives the new session.
 // The leaf's existing DOM is wrapped in a new branch element in-place.
 function splitLeaf(
   leaf: Leaf,
-  dir: "row" | "col",
+  dir: SplitAxis,
   newSession: PaneSession,
+  placement: SplitPlacement,
   onDividerDown: (b: Branch, e: PointerEvent) => void,
-): Branch {
+): { branch: Branch; newLeaf: Leaf } {
   const el = document.createElement("div");
   el.className = `split dir-${dir}`;
   const divider = document.createElement("div");
   divider.className = `divider dir-${dir}`;
+  const newLeaf: Leaf = {
+    kind: "leaf",
+    session: newSession,
+    parent: null as unknown as Branch,
+  };
+  const newFirst = placement === "before";
 
   const branch: Branch = {
     kind: "branch",
     dir,
     ratio: 0.5,
-    a: leaf,
-    b: { kind: "leaf", session: newSession, parent: null as unknown as Branch },
+    a: newFirst ? newLeaf : leaf,
+    b: newFirst ? leaf : newLeaf,
     el,
     divider,
     parent: leaf.parent,
   };
-  (branch.b as Leaf).parent = branch;
+  newLeaf.parent = branch;
 
   const oldEl = leaf.session.leafEl;
   // Inherit the leaf's flex slot in its old parent — otherwise nested
@@ -736,9 +746,15 @@ function splitLeaf(
   const host = oldEl.parentElement!;
   host.replaceChild(el, oldEl);
   if (inheritedFlex) el.style.flex = inheritedFlex;
-  el.appendChild(oldEl);
-  el.appendChild(divider);
-  el.appendChild(newSession.leafEl);
+  if (newFirst) {
+    el.appendChild(newSession.leafEl);
+    el.appendChild(divider);
+    el.appendChild(oldEl);
+  } else {
+    el.appendChild(oldEl);
+    el.appendChild(divider);
+    el.appendChild(newSession.leafEl);
+  }
 
   // Re-point the old parent's child slot at this new branch — without
   // this, paneLeaves(tab.root) skips the new sub-tree and follow-up
@@ -755,7 +771,7 @@ function splitLeaf(
   applyBranchSizing(branch);
 
   divider.addEventListener("pointerdown", (e) => onDividerDown(branch, e));
-  return branch;
+  return { branch, newLeaf };
 }
 
 // Removes leaf, replaces its parent branch with the surviving sibling.
@@ -911,18 +927,25 @@ class Tab {
     this.tabEl.remove();
   }
 
-  // Split the active leaf and graft a new session into the second slot.
+  // Split the active leaf and graft a new session next to it.
   // The new session's leafEl is placed in the DOM by splitLeaf before
   // attach() runs, so xterm.open() sees a connected element.
-  splitActive(dir: "row" | "col", newSession: PaneSession): Leaf {
+  splitActive(
+    dir: SplitAxis,
+    newSession: PaneSession,
+    placement: SplitPlacement = "after",
+  ): Leaf {
     const leaf = this.active;
-    const branch = splitLeaf(leaf, dir, newSession, (b, e) =>
-      this.beginDividerDrag(b, e),
+    const { branch, newLeaf } = splitLeaf(
+      leaf,
+      dir,
+      newSession,
+      placement,
+      (b, e) => this.beginDividerDrag(b, e),
     );
     if (this.root === leaf) this.root = branch;
     newSession.attach();
     if (this.isActive) newSession.activate();
-    const newLeaf = branch.b as Leaf;
     this.setActiveLeaf(newLeaf);
     newLeaf.session.focus();
     return newLeaf;
@@ -1147,7 +1170,10 @@ class TabManager {
     return tab;
   }
 
-  async splitActive(dir: "row" | "col"): Promise<void> {
+  async splitActive(
+    dir: SplitAxis,
+    placement: SplitPlacement = "after",
+  ): Promise<void> {
     const tab = this.active;
     if (!tab) return;
     const pty = window.pty;
@@ -1163,7 +1189,7 @@ class TabManager {
     // splitActive places leafEl into the DOM and calls session.attach()
     // before activate(), so the leaf is fully wired before pty.ready
     // releases buffered output.
-    const leaf = tab.splitActive(dir, session);
+    const leaf = tab.splitActive(dir, session, placement);
     this.registerLeaf(tab, leaf);
     pty.ready(ptyId);
   }
@@ -1512,10 +1538,18 @@ window.pty?.onMenu((action) => {
       void tabs.createTab();
       break;
     case "split-row":
+    case "split-right":
       void tabs.splitActive("row");
       break;
     case "split-col":
+    case "split-down":
       void tabs.splitActive("col");
+      break;
+    case "split-left":
+      void tabs.splitActive("row", "before");
+      break;
+    case "split-up":
+      void tabs.splitActive("col", "before");
       break;
     case "close-pane":
       tabs.closeActivePane();
@@ -1539,6 +1573,18 @@ window.pty?.onContextAction((action) => {
       break;
     case "paste":
       void tabs.pasteToActive();
+      break;
+    case "split-left":
+      void tabs.splitActive("row", "before");
+      break;
+    case "split-right":
+      void tabs.splitActive("row", "after");
+      break;
+    case "split-bottom":
+      void tabs.splitActive("col", "after");
+      break;
+    case "split-up":
+      void tabs.splitActive("col", "before");
       break;
   }
 });

@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer } from "electron";
 import os from "node:os";
 
+type TerminalContextAction =
+  | "copy"
+  | "paste"
+  | "split-left"
+  | "split-right"
+  | "split-bottom"
+  | "split-up";
+
 const api = {
   homeDir: os.homedir(),
   platform: process.platform,
@@ -68,10 +76,10 @@ const api = {
   showContextMenu(opts: { canCopy: boolean }): Promise<void> {
     return ipcRenderer.invoke("terminal:context-menu", opts);
   },
-  onContextAction(cb: (action: "copy" | "paste") => void) {
+  onContextAction(cb: (action: TerminalContextAction) => void) {
     const listener = (
       _: Electron.IpcRendererEvent,
-      action: "copy" | "paste",
+      action: TerminalContextAction,
     ) => cb(action);
     ipcRenderer.on("terminal:context-action", listener);
     return () =>
