@@ -1,4 +1,11 @@
-import { app, BrowserWindow, Menu, nativeImage, ipcMain } from "electron";
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  nativeImage,
+  ipcMain,
+  clipboard,
+} from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { statSync } from "node:fs";
@@ -127,8 +134,8 @@ function buildMenu(): void {
         { role: "redo" },
         { type: "separator" },
         { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
+        shellItem("Copy", "CmdOrCtrl+C", "copy"),
+        shellItem("Paste", "CmdOrCtrl+V", "paste"),
         { role: "selectAll" },
       ],
     },
@@ -217,6 +224,34 @@ ipcMain.handle("app:initial-cwd", () => {
   pendingCwd = null;
   return c;
 });
+
+ipcMain.handle("clipboard:read-text", () => clipboard.readText());
+
+ipcMain.handle("clipboard:write-text", (_event, text: string) => {
+  clipboard.writeText(text);
+});
+
+ipcMain.handle(
+  "terminal:context-menu",
+  (event, opts: { canCopy: boolean }) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+    const canPaste = clipboard.readText().length > 0;
+    const menu = Menu.buildFromTemplate([
+      {
+        label: "Copy",
+        enabled: opts.canCopy,
+        click: () => event.sender.send("terminal:context-action", "copy"),
+      },
+      {
+        label: "Paste",
+        enabled: canPaste,
+        click: () => event.sender.send("terminal:context-action", "paste"),
+      },
+    ]);
+    menu.popup({ window: win });
+  },
+);
 
 app.whenReady().then(() => {
   // macOS ignores BrowserWindow.icon for the dock; set it explicitly so

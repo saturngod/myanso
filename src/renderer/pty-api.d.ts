@@ -16,6 +16,10 @@ declare global {
       initialCwd(): Promise<string | null>;
       onOpenCwd(cb: (cwd: string) => void): () => void;
       onFullscreen(cb: (on: boolean) => void): () => void;
+      readClipboardText(): Promise<string>;
+      writeClipboardText(text: string): Promise<void>;
+      showContextMenu(opts: { canCopy: boolean }): Promise<void>;
+      onContextAction(cb: (action: "copy" | "paste") => void): () => void;
     };
   }
 }
