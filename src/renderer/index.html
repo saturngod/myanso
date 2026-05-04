@@ -320,6 +320,18 @@
                 display: grid;
                 place-items: center;
                 z-index: 200;
+                animation: settings-fade-in 0.2s ease;
+            }
+            #settings-modal.closing {
+                animation: settings-fade-out 0.15s ease forwards;
+            }
+            @keyframes settings-fade-in {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+            @keyframes settings-fade-out {
+                from { opacity: 1; }
+                to { opacity: 0; }
             }
             .settings-panel {
                 width: min(460px, calc(100vw - 32px));
@@ -328,6 +340,18 @@
                 border-radius: 14px;
                 box-shadow: 0 28px 60px rgba(0, 0, 0, 0.45);
                 padding: 18px;
+                animation: settings-panel-in 0.2s ease;
+            }
+            #settings-modal.closing .settings-panel {
+                animation: settings-panel-out 0.15s ease forwards;
+            }
+            @keyframes settings-panel-in {
+                from { opacity: 0; transform: scale(0.96) translateY(8px); }
+                to { opacity: 1; transform: scale(1) translateY(0); }
+            }
+            @keyframes settings-panel-out {
+                from { opacity: 1; transform: scale(1) translateY(0); }
+                to { opacity: 0; transform: scale(0.96) translateY(8px); }
             }
             .settings-head {
                 display: flex;
@@ -392,6 +416,36 @@
                 font-size: 11px;
                 line-height: 1.4;
             }
+            .settings-custom-font-row {
+                overflow: hidden;
+                transition: max-height 0.2s ease, opacity 0.2s ease, margin 0.2s ease;
+            }
+            .settings-custom-font-row[hidden] {
+                max-height: 0;
+                opacity: 0;
+                margin-top: -12px;
+            }
+            .settings-custom-font-row:not([hidden]) {
+                max-height: 120px;
+                opacity: 1;
+            }
+            .settings-preview {
+                background: rgba(0, 0, 0, 0.35);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 10px 12px;
+                margin-bottom: 14px;
+                font-family: var(--preview-font, monospace);
+                font-size: var(--preview-size, 14px);
+                color: var(--fg);
+                white-space: pre-wrap;
+                overflow: hidden;
+                height: 56px;
+                box-sizing: border-box;
+            }
+            .settings-preview .muted {
+                color: var(--muted);
+            }
             .settings-foot {
                 display: flex;
                 justify-content: space-between;
@@ -401,6 +455,10 @@
             .settings-hint {
                 color: var(--muted);
                 font-size: 12px;
+            }
+            .settings-foot-actions {
+                display: flex;
+                gap: 8px;
             }
             .settings-reset {
                 border: 1px solid var(--border);
@@ -412,6 +470,22 @@
             }
             .settings-reset:hover {
                 background: rgba(255, 255, 255, 0.08);
+            }
+            .settings-apply {
+                border: 1px solid #5b9bd5;
+                background: rgba(91, 155, 213, 0.15);
+                color: #8bbce6;
+                border-radius: 8px;
+                padding: 8px 16px;
+                cursor: pointer;
+                font-weight: 500;
+            }
+            .settings-apply:hover {
+                background: rgba(91, 155, 213, 0.28);
+            }
+            .settings-apply:disabled {
+                opacity: 0.35;
+                cursor: default;
             }
         </style>
     </head>
@@ -435,6 +509,8 @@
                 <p class="settings-copy">
                     Adjust how terminal text is displayed. Changes apply to all tabs and panes.
                 </p>
+                <div class="settings-preview" id="settings-preview"><span class="muted">$</span> echo <span class="muted">"</span>မင်္ဂလာပါ<span class="muted">"</span>
+<span class="muted">$</span> မြန်မာစာ <span class="muted">│</span> hello world</div>
                 <div class="settings-group">
                     <div class="setting-row">
                         <label for="settings-view-mode">View mode</label>
@@ -458,7 +534,7 @@
                             Installed monospace fonts detected on this machine appear here.
                         </div>
                     </div>
-                    <div class="setting-row">
+                    <div class="setting-row settings-custom-font-row" id="settings-custom-font-row" hidden>
                         <label for="settings-custom-font">Custom local font name</label>
                         <input
                             id="settings-custom-font"
@@ -472,7 +548,10 @@
                 </div>
                 <div class="settings-foot">
                     <span class="settings-hint">Stored locally on this machine.</span>
-                    <button class="settings-reset" id="settings-reset">Reset</button>
+                    <div class="settings-foot-actions">
+                        <button class="settings-reset" id="settings-reset">Reset</button>
+                        <button class="settings-apply" id="settings-apply" disabled>Save &amp; Apply</button>
+                    </div>
                 </div>
             </div>
         </div>
