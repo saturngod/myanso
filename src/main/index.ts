@@ -12,6 +12,14 @@ import { statSync } from "node:fs";
 import { initPtyHost, killSessionsFor } from "./pty.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const APP_NAME = "Myanso";
+
+app.setName(APP_NAME);
+
+const settingsMenuIcon = nativeImage.createFromDataURL(
+  "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'><g fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'><path d='M6.6 1.6h2.8l.4 1.8 1.4.6 1.6-1 1.6 2.5-1.4 1.2v1.6l1.4 1.2-1.6 2.5-1.6-1-1.4.6-.4 1.8H6.6l-.4-1.8-1.4-.6-1.6 1-1.6-2.5L3 8.3V6.7L1.6 5.5 3.2 3l1.6 1 1.4-.6z'/><circle cx='8' cy='7.5' r='2.2'/></g></svg>",
+);
+settingsMenuIcon.setTemplateImage(true);
 
 // Folder dropped on dock → use as cwd. File dropped → use its parent dir.
 function resolveCwd(p: string): string | null {
@@ -36,7 +44,7 @@ function createWindow(): BrowserWindow {
     width: 1100,
     height: 700,
     backgroundColor: "#15171e",
-    title: "Myanso",
+    title: APP_NAME,
     icon: appIcon,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     trafficLightPosition: { x: 12, y: 10 },
@@ -106,15 +114,26 @@ function buildMenu(): void {
     click: () => sendToFocused(action),
   });
 
+  const settingsItem = (
+    accelerator: string,
+  ): Electron.MenuItemConstructorOptions => ({
+    ...shellItem(
+      isMac ? "⚙  Settings..." : "Settings...",
+      accelerator,
+      "open-settings",
+    ),
+    ...(!isMac ? { icon: settingsMenuIcon } : {}),
+  });
+
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(isMac
       ? ([
           {
-            label: app.name,
+            label: APP_NAME,
             submenu: [
               { role: "about" },
               { type: "separator" },
-              shellItem("Settings", "Cmd+,", "open-settings"),
+              settingsItem("Cmd+,"),
               { type: "separator" },
               { role: "services" },
               { type: "separator" },
@@ -130,6 +149,12 @@ function buildMenu(): void {
     {
       label: "Edit",
       submenu: [
+        ...(!isMac
+          ? ([
+              settingsItem("Ctrl+,"),
+              { type: "separator" },
+            ] as Electron.MenuItemConstructorOptions[])
+          : []),
         { role: "undo" },
         { role: "redo" },
         { type: "separator" },

@@ -2,42 +2,21 @@ import { Terminal, IUnicodeVersionProvider } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import {
+  buildTerminalFontFamily,
+  loadAppearance,
+  normalizeAppearance,
+  saveAppearance,
+  VIEW_MODE_LINE_HEIGHT,
+  type AppearancePrefs,
+} from "./appearance";
+import { initSettingsPanel } from "./settings-panel";
 import "@xterm/xterm/css/xterm.css";
 
 // ---- Chrome DOM ------------------------------------------------------
 const tabbar = document.getElementById("tabbar") as HTMLDivElement;
 const newTabBtn = document.getElementById("new-tab") as HTMLButtonElement;
-const settingsBtn = document.getElementById(
-  "settings-btn",
-) as HTMLButtonElement;
 const wrapper = document.getElementById("terminal-wrapper") as HTMLDivElement;
-const settingsModal = document.getElementById(
-  "settings-modal",
-) as HTMLDivElement;
-const settingsCloseBtn = document.getElementById(
-  "settings-close",
-) as HTMLButtonElement;
-const settingsViewMode = document.getElementById(
-  "settings-view-mode",
-) as HTMLSelectElement;
-const settingsFontSize = document.getElementById(
-  "settings-font-size",
-) as HTMLInputElement;
-const settingsFontSizeValue = document.getElementById(
-  "settings-font-size-value",
-) as HTMLInputElement;
-const settingsFontFamily = document.getElementById(
-  "settings-font-family",
-) as HTMLSelectElement;
-const settingsFontFamilyNote = document.getElementById(
-  "settings-font-family-note",
-) as HTMLDivElement;
-const settingsCustomFont = document.getElementById(
-  "settings-custom-font",
-) as HTMLInputElement;
-const settingsResetBtn = document.getElementById(
-  "settings-reset",
-) as HTMLButtonElement;
 
 // Mouse wheels emit deltaY; the tabbar only scrolls on the X axis. Without
 // this, a regular wheel does nothing over an overflowing tab strip — only
@@ -174,161 +153,7 @@ function applyMyanmarWidth(
   }
 }
 
-const SETTINGS_KEY = "myanso:appearance";
-const FALLBACK_MONO_FONTS = [
-  "Menlo",
-  "SF Mono",
-  "Monaco",
-  "Consolas",
-  "Cascadia Mono",
-  "DejaVu Sans Mono",
-  "Liberation Mono",
-  "Ubuntu Mono",
-  "Noto Sans Mono",
-];
-const MYANMAR_FALLBACK_FONTS = [
-  "Noto Sans Myanmar",
-  "Myanmar Sangam MN",
-  "Myanmar MN",
-];
-const FONT_CHOICES = [
-  { value: "system", label: "System Mono" },
-  { value: "JetBrains Mono", label: "JetBrains Mono" },
-  { value: "Fira Mono", label: "Fira Mono" },
-  { value: "Fira Code", label: "Fira Code" },
-  { value: "Cascadia Mono", label: "Cascadia Mono" },
-  { value: "Consolas", label: "Consolas" },
-  { value: "Menlo", label: "Menlo" },
-  { value: "Monaco", label: "Monaco" },
-  { value: "DejaVu Sans Mono", label: "DejaVu Sans Mono" },
-  { value: "Ubuntu Mono", label: "Ubuntu Mono" },
-  { value: "Liberation Mono", label: "Liberation Mono" },
-] as const;
-const VIEW_MODE_LINE_HEIGHT = {
-  compact: 1.15,
-  default: 1.25,
-  presentation: 1.4,
-} as const;
-type ViewMode = keyof typeof VIEW_MODE_LINE_HEIGHT;
-type FontChoice = (typeof FONT_CHOICES)[number]["value"] | "custom";
-interface AppearancePrefs {
-  viewMode: ViewMode;
-  fontSize: number;
-  fontFamily: string;
-}
-
-const DEFAULT_APPEARANCE: AppearancePrefs = {
-  viewMode: "default",
-  fontSize: 14,
-  fontFamily: "system",
-};
-
-function clampFontSize(n: number): number {
-  return Math.max(
-    11,
-    Math.min(24, Math.round(n || DEFAULT_APPEARANCE.fontSize)),
-  );
-}
-
-function isViewMode(v: unknown): v is ViewMode {
-  return v === "compact" || v === "default" || v === "presentation";
-}
-
-function normalizeFontChoice(v: unknown): string {
-  if (typeof v !== "string") return DEFAULT_APPEARANCE.fontFamily;
-  const trimmed = v.trim();
-  return trimmed || DEFAULT_APPEARANCE.fontFamily;
-}
-
-function normalizeAppearance(raw: unknown): AppearancePrefs {
-  if (!raw || typeof raw !== "object") return { ...DEFAULT_APPEARANCE };
-  const obj = raw as Partial<AppearancePrefs>;
-  return {
-    viewMode: isViewMode(obj.viewMode)
-      ? obj.viewMode
-      : DEFAULT_APPEARANCE.viewMode,
-    fontSize: clampFontSize(Number(obj.fontSize)),
-    fontFamily: normalizeFontChoice(obj.fontFamily),
-  };
-}
-
-function loadAppearance(): AppearancePrefs {
-  try {
-    const raw = window.localStorage.getItem(SETTINGS_KEY);
-    return raw
-      ? normalizeAppearance(JSON.parse(raw))
-      : { ...DEFAULT_APPEARANCE };
-  } catch {
-    return { ...DEFAULT_APPEARANCE };
-  }
-}
-
-function saveAppearance(prefs: AppearancePrefs): void {
-  try {
-    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(prefs));
-  } catch (e) {
-    console.warn("myanso: failed to save appearance to localStorage", e);
-  }
-}
-
 let appearance = loadAppearance();
-
-function quoteFontFamily(name: string): string {
-  return /[",]/.test(name) || /\s/.test(name)
-    ? `"${name.replace(/"/g, '\\"')}"`
-    : name;
-}
-
-function buildTerminalFontFamily(selected: string): string {
-  const families: string[] = [];
-  const seen = new Set<string>();
-  const push = (name: string) => {
-    const trimmed = name.trim();
-    if (!trimmed || seen.has(trimmed)) return;
-    seen.add(trimmed);
-    families.push(trimmed);
-  };
-
-  if (selected !== "system") push(selected);
-  for (const name of FALLBACK_MONO_FONTS) push(name);
-  for (const name of MYANMAR_FALLBACK_FONTS) push(name);
-  push("monospace");
-
-  return families
-    .map((name) => (name === "monospace" ? name : quoteFontFamily(name)))
-    .join(", ");
-}
-
-async function waitForFontsReady(): Promise<void> {
-  try {
-    await document.fonts.ready;
-  } catch {
-    // Ignore readiness failures and fall back to best-effort checks below.
-  }
-}
-
-function isFontAvailable(name: string): boolean {
-  try {
-    return document.fonts.check(`14px ${quoteFontFamily(name)}`);
-  } catch {
-    return false;
-  }
-}
-
-async function availableFontChoices(): Promise<
-  Array<{ value: FontChoice; label: string }>
-> {
-  await waitForFontsReady();
-  return FONT_CHOICES.filter((font) =>
-    font.value === "system" ? true : isFontAvailable(font.value),
-  );
-}
-
-function fontChoiceForValue(value: string): FontChoice {
-  return FONT_CHOICES.some((font) => font.value === value)
-    ? (value as FontChoice)
-    : "custom";
-}
 
 const home = window.pty?.homeDir || "";
 function prettyPath(raw: string): string {
@@ -1509,14 +1334,14 @@ class TabManager {
 
   private handleClipboardShortcut(e: KeyboardEvent): boolean {
     if (e.type !== "keydown") return false;
-    if (e.altKey || e.shiftKey) return false;
     const isMac = window.pty?.platform === "darwin";
+    if (e.altKey) return false;
     const mod = isMac ? e.metaKey : e.ctrlKey;
     if (!mod || (!isMac && e.metaKey)) return false;
+    if (isMac ? e.shiftKey : !e.shiftKey) return false;
 
     if (e.code === "KeyC") {
       if (!currentSelectionText()) {
-        if (!isMac) return false;
         e.preventDefault();
         return true;
       }
@@ -1588,63 +1413,16 @@ window.pty?.onFullscreen((on) => {
 });
 
 const tabs = new TabManager();
-
-async function syncFontChoicesUi(selected: string): Promise<void> {
-  const choices = await availableFontChoices();
-  settingsFontFamily.innerHTML = "";
-  for (const choice of choices) {
-    const option = document.createElement("option");
-    option.value = choice.value;
-    option.textContent = choice.label;
-    settingsFontFamily.appendChild(option);
-  }
-
-  const choice = fontChoiceForValue(selected);
-  if (choice === "custom") {
-    const customOption = document.createElement("option");
-    customOption.value = "custom";
-    customOption.textContent = "Custom local font";
-    settingsFontFamily.appendChild(customOption);
-    settingsFontFamily.value = "custom";
-    settingsCustomFont.value = selected === "system" ? "" : selected;
-  } else {
-    settingsFontFamily.value = choice;
-    settingsCustomFont.value = "";
-  }
-
-  const installed = Math.max(0, choices.length - 1);
-  settingsFontFamilyNote.textContent =
-    installed > 0
-      ? `${installed} installed monospace fonts detected on this machine.`
-      : "No known optional monospace fonts detected. You can still type a local font name below.";
-}
-
-function syncSettingsUi(prefs: AppearancePrefs): void {
-  settingsViewMode.value = prefs.viewMode;
-  settingsFontSize.value = String(prefs.fontSize);
-  settingsFontSizeValue.value = String(prefs.fontSize);
-  void syncFontChoicesUi(prefs.fontFamily);
-}
-
-function applyAppearancePrefs(next: AppearancePrefs): void {
-  appearance = normalizeAppearance(next);
-  saveAppearance(appearance);
-  syncSettingsUi(appearance);
-  tabs.applyAppearance(appearance);
-}
-
-function openSettings(): void {
-  syncSettingsUi(appearance);
-  settingsModal.hidden = false;
-  settingsViewMode.focus();
-}
-
-function closeSettings(): void {
-  settingsModal.hidden = true;
-  settingsBtn.focus();
-}
-
-syncSettingsUi(appearance);
+const settingsPanel = initSettingsPanel({
+  initial: appearance,
+  platform: window.pty?.platform,
+  focusFallback: newTabBtn,
+  onChange: (prefs) => {
+    appearance = normalizeAppearance(prefs);
+    saveAppearance(appearance);
+    tabs.applyAppearance(appearance);
+  },
+});
 
 if (!window.pty) {
   const fallback = document.createElement("div");
@@ -1668,65 +1446,6 @@ if (!window.pty) {
 
 newTabBtn.addEventListener("click", () => {
   void tabs.createTab();
-});
-settingsBtn.addEventListener("click", () => openSettings());
-settingsCloseBtn.addEventListener("click", () => closeSettings());
-settingsModal.addEventListener("click", (e) => {
-  if (e.target === settingsModal) closeSettings();
-});
-settingsViewMode.addEventListener("change", () => {
-  applyAppearancePrefs({
-    ...appearance,
-    viewMode: normalizeAppearance({
-      ...appearance,
-      viewMode: settingsViewMode.value,
-    }).viewMode,
-  });
-});
-settingsFontSize.addEventListener("input", () => {
-  applyAppearancePrefs({
-    ...appearance,
-    fontSize: Number(settingsFontSize.value),
-  });
-});
-settingsFontSizeValue.addEventListener("input", () => {
-  applyAppearancePrefs({
-    ...appearance,
-    fontSize: Number(settingsFontSizeValue.value),
-  });
-});
-settingsFontFamily.addEventListener("change", () => {
-  if (settingsFontFamily.value === "custom") {
-    settingsCustomFont.focus();
-    return;
-  }
-  applyAppearancePrefs({
-    ...appearance,
-    fontFamily: settingsFontFamily.value,
-  });
-});
-settingsCustomFont.addEventListener("change", () => {
-  const next = settingsCustomFont.value.trim();
-  if (!next) {
-    applyAppearancePrefs({
-      ...appearance,
-      fontFamily: "system",
-    });
-    return;
-  }
-  applyAppearancePrefs({
-    ...appearance,
-    fontFamily: next,
-  });
-});
-settingsResetBtn.addEventListener("click", () => {
-  applyAppearancePrefs({ ...DEFAULT_APPEARANCE });
-});
-window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !settingsModal.hidden) {
-    e.preventDefault();
-    closeSettings();
-  }
 });
 
 // Drag-and-drop file/folder onto the terminal area pastes its absolute
@@ -1806,6 +1525,9 @@ window.pty?.onMenu((action) => {
       break;
     case "paste":
       void tabs.pasteToActive();
+      break;
+    case "open-settings":
+      settingsPanel.open();
       break;
   }
 });
