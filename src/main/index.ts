@@ -162,9 +162,6 @@ function buildMenu(): void {
               { type: "separator" },
             ] as Electron.MenuItemConstructorOptions[])
           : []),
-        { role: "undo" },
-        { role: "redo" },
-        { type: "separator" },
         shellItem("Copy", isMac ? "Cmd+C" : "Ctrl+Shift+C", "copy"),
         shellItem("Paste", isMac ? "Cmd+V" : "Ctrl+Shift+V", "paste"),
       ],
