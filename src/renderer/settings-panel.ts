@@ -1,8 +1,10 @@
 import {
   availableFontChoices,
+  buildTerminalFontFamily,
   clampFontSize,
   DEFAULT_APPEARANCE,
   normalizeAppearance,
+  VIEW_MODE_LINE_HEIGHT,
   type AppearancePrefs,
 } from "./appearance";
 
@@ -33,34 +35,70 @@ export function initSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
   const settingsFontFamilyNote = byId<HTMLDivElement>(
     "settings-font-family-note",
   );
+  const settingsCustomFontRow = byId<HTMLDivElement>(
+    "settings-custom-font-row",
+  );
   const settingsCustomFont = byId<HTMLInputElement>("settings-custom-font");
   const settingsResetBtn = byId<HTMLButtonElement>("settings-reset");
+  const settingsApplyBtn = byId<HTMLButtonElement>("settings-apply");
+  const settingsPreview = byId<HTMLDivElement>("settings-preview");
 
-  let appearance = normalizeAppearance(opts.initial);
+  let lastApplied = normalizeAppearance(opts.initial);
+  let pending = { ...lastApplied };
   let fontSizeInputTimer: number | null = null;
+  let closing = false;
+  let cachedChoices: Array<{ value: string; label: string }> | null = null;
+  let lastChoicesSnapshot: string | null = null;
+
+  function prefsEqual(a: AppearancePrefs, b: AppearancePrefs): boolean {
+    return (
+      a.viewMode === b.viewMode &&
+      a.fontSize === b.fontSize &&
+      a.fontFamily === b.fontFamily
+    );
+  }
+
+  function syncApplyButton(): void {
+    settingsApplyBtn.disabled = prefsEqual(pending, lastApplied);
+  }
+
+  async function getFontChoices(): Promise<
+    Array<{ value: string; label: string }>
+  > {
+    if (cachedChoices) return cachedChoices;
+    cachedChoices = await availableFontChoices();
+    return cachedChoices;
+  }
 
   async function syncFontChoicesUi(selected: string): Promise<void> {
-    const choices = await availableFontChoices();
-    settingsFontFamily.innerHTML = "";
-    for (const choice of choices) {
-      const option = document.createElement("option");
-      option.value = choice.value;
-      option.textContent = choice.label;
-      settingsFontFamily.appendChild(option);
-    }
+    const choices = await getFontChoices();
+    const snapshot = choices.map((c) => c.value).join(",");
 
-    const isKnownChoice = choices.some((choice) => choice.value === selected);
-    if (selected !== "system" && !isKnownChoice) {
+    if (snapshot !== lastChoicesSnapshot) {
+      settingsFontFamily.innerHTML = "";
+      for (const choice of choices) {
+        const option = document.createElement("option");
+        option.value = choice.value;
+        option.textContent = choice.label;
+        settingsFontFamily.appendChild(option);
+      }
       const customOption = document.createElement("option");
       customOption.value = "custom";
       customOption.textContent = "Custom local font";
       settingsFontFamily.appendChild(customOption);
+      lastChoicesSnapshot = snapshot;
+    }
+
+    const isKnownChoice = choices.some((choice) => choice.value === selected);
+    if (selected !== "system" && !isKnownChoice) {
       settingsFontFamily.value = "custom";
       settingsCustomFont.value = selected;
     } else {
       settingsFontFamily.value = selected;
       settingsCustomFont.value = "";
     }
+
+    toggleCustomFontRow(selected !== "system" && !isKnownChoice);
 
     const installed = Math.max(0, choices.length - 1);
     settingsFontFamilyNote.textContent =
@@ -69,62 +107,87 @@ export function initSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
         : "No local monospace fonts were exposed by the system. You can still type a local font name below.";
   }
 
-  function syncSettingsUi(prefs: AppearancePrefs): void {
+  function toggleCustomFontRow(show: boolean): void {
+    settingsCustomFontRow.hidden = !show;
+  }
+
+  function updatePreview(prefs: AppearancePrefs): void {
+    const fontFamily = buildTerminalFontFamily(prefs.fontFamily);
+    settingsPreview.style.setProperty("--preview-font", fontFamily);
+    settingsPreview.style.setProperty("--preview-size", `${prefs.fontSize}px`);
+    settingsPreview.style.lineHeight = String(VIEW_MODE_LINE_HEIGHT[prefs.viewMode]);
+  }
+
+  function syncControlsFromPrefs(prefs: AppearancePrefs): void {
     settingsViewMode.value = prefs.viewMode;
     settingsFontSize.value = String(prefs.fontSize);
     settingsFontSizeValue.value = String(prefs.fontSize);
-    void syncFontChoicesUi(prefs.fontFamily);
   }
 
-  function applyAppearancePrefs(next: AppearancePrefs): void {
-    appearance = normalizeAppearance(next);
-    syncSettingsUi(appearance);
-    opts.onChange(appearance);
+  /** Update pending state, sync controls + preview, enable Apply if dirty. */
+  function markDirty(next: AppearancePrefs): void {
+    pending = normalizeAppearance(next);
+    syncControlsFromPrefs(pending);
+    updatePreview(pending);
+    syncApplyButton();
   }
 
-  function scheduleFontSizeApply(raw: string, syncControls: boolean): void {
-    const parsed = Number(raw);
+  /** Commit pending → lastApplied, save + apply to all tabs. */
+  function applyPending(): void {
+    lastApplied = { ...pending };
+    opts.onChange(lastApplied);
+    syncApplyButton();
+  }
+
+  function setFontSize(rawValue: string): void {
     if (fontSizeInputTimer !== null) {
       window.clearTimeout(fontSizeInputTimer);
       fontSizeInputTimer = null;
     }
-    if (!Number.isFinite(parsed) || parsed < 11 || parsed > 24) return;
-    const fontSize = clampFontSize(parsed);
-    if (syncControls) {
-      settingsFontSize.value = String(fontSize);
-      settingsFontSizeValue.value = String(fontSize);
-    } else {
-      settingsFontSize.value = String(fontSize);
-    }
+    const fontSize = clampFontSize(Number(rawValue));
+    settingsFontSize.value = String(fontSize);
+    settingsFontSizeValue.value = String(fontSize);
     fontSizeInputTimer = window.setTimeout(() => {
       fontSizeInputTimer = null;
-      applyAppearancePrefs({
-        ...appearance,
-        fontSize,
-      });
+      markDirty({ ...pending, fontSize });
     }, 120);
   }
 
-  function flushFontSizeApply(raw: string): void {
+  function flushFontSize(rawValue: string): void {
     if (fontSizeInputTimer !== null) {
       window.clearTimeout(fontSizeInputTimer);
       fontSizeInputTimer = null;
     }
-    applyAppearancePrefs({
-      ...appearance,
-      fontSize: Number(raw),
-    });
+    const fontSize = clampFontSize(Number(rawValue));
+    markDirty({ ...pending, fontSize });
   }
 
   function open(): void {
-    syncSettingsUi(appearance);
+    if (closing) return;
+    pending = { ...lastApplied };
+    syncControlsFromPrefs(pending);
+    updatePreview(pending);
+    void syncFontChoicesUi(pending.fontFamily);
+    syncApplyButton();
     settingsModal.hidden = false;
     settingsViewMode.focus();
   }
 
   function close(): void {
-    settingsModal.hidden = true;
-    opts.focusFallback.focus();
+    if (closing) return;
+    closing = true;
+    settingsModal.classList.add("closing");
+    settingsModal.addEventListener(
+      "animationend",
+      () => {
+        settingsModal.hidden = true;
+        settingsModal.classList.remove("closing");
+        closing = false;
+        pending = { ...lastApplied };
+        opts.focusFallback.focus();
+      },
+      { once: true },
+    );
   }
 
   settingsCloseBtn.addEventListener("click", () => close());
@@ -132,52 +195,52 @@ export function initSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
     if (e.target === settingsModal) close();
   });
   settingsViewMode.addEventListener("change", () => {
-    applyAppearancePrefs({
-      ...appearance,
+    markDirty({
+      ...pending,
       viewMode: normalizeAppearance({
-        ...appearance,
+        ...pending,
         viewMode: settingsViewMode.value,
       }).viewMode,
     });
   });
   settingsFontSize.addEventListener("input", () => {
-    scheduleFontSizeApply(settingsFontSize.value, true);
+    setFontSize(settingsFontSize.value);
   });
   settingsFontSize.addEventListener("change", () => {
-    flushFontSizeApply(settingsFontSize.value);
+    flushFontSize(settingsFontSize.value);
   });
   settingsFontSizeValue.addEventListener("input", () => {
-    scheduleFontSizeApply(settingsFontSizeValue.value, false);
+    setFontSize(settingsFontSizeValue.value);
   });
   settingsFontSizeValue.addEventListener("change", () => {
-    flushFontSizeApply(settingsFontSizeValue.value);
+    flushFontSize(settingsFontSizeValue.value);
   });
   settingsFontFamily.addEventListener("change", () => {
-    if (settingsFontFamily.value === "custom") {
+    const value = settingsFontFamily.value;
+    if (value === "custom") {
+      toggleCustomFontRow(true);
       settingsCustomFont.focus();
       return;
     }
-    applyAppearancePrefs({
-      ...appearance,
-      fontFamily: settingsFontFamily.value,
-    });
+    toggleCustomFontRow(false);
+    markDirty({ ...pending, fontFamily: value });
   });
   settingsCustomFont.addEventListener("change", () => {
     const next = settingsCustomFont.value.trim();
     if (!next) {
-      applyAppearancePrefs({
-        ...appearance,
-        fontFamily: "system",
-      });
+      markDirty({ ...pending, fontFamily: "system" });
       return;
     }
-    applyAppearancePrefs({
-      ...appearance,
-      fontFamily: next,
-    });
+    markDirty({ ...pending, fontFamily: next });
   });
   settingsResetBtn.addEventListener("click", () => {
-    applyAppearancePrefs({ ...DEFAULT_APPEARANCE });
+    cachedChoices = null;
+    lastChoicesSnapshot = null;
+    markDirty({ ...DEFAULT_APPEARANCE });
+    void syncFontChoicesUi(DEFAULT_APPEARANCE.fontFamily);
+  });
+  settingsApplyBtn.addEventListener("click", () => {
+    if (!settingsApplyBtn.disabled) applyPending();
   });
   window.addEventListener(
     "keydown",
