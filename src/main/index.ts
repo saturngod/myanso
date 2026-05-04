@@ -167,7 +167,6 @@ function buildMenu(): void {
         { type: "separator" },
         shellItem("Copy", isMac ? "Cmd+C" : "Ctrl+Shift+C", "copy"),
         shellItem("Paste", isMac ? "Cmd+V" : "Ctrl+Shift+V", "paste"),
-        { role: "selectAll" },
       ],
     },
     {
