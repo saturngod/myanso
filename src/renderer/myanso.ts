@@ -143,10 +143,7 @@ function applyMyanmarWidth(
     )._core?.unicodeService?._providers?.["11"];
     if (v11) {
       const origWc = v11.wcwidth.bind(v11);
-      v11.wcwidth = (cp) =>
-        isMyanmarMc(cp) && term.buffer.active.type === "normal"
-          ? 0
-          : origWc(cp);
+      v11.wcwidth = (cp) => (isMyanmarMc(cp) ? 0 : origWc(cp));
     }
   } catch (e) {
     console.warn("[myanso] unicode11 failed", e);
@@ -261,7 +258,9 @@ class PaneSession {
     this.term.loadAddon(this.fit);
     // Ubuntu bash/readline uses the host wcwidth table while editing the
     // prompt. There Myanmar spacing marks are one cell, so collapsing them
-    // in xterm makes cursor-left redisplay paint into the prompt.
+    // in xterm makes cursor-left redisplay paint into the prompt. On
+    // other platforms, keep normal and alternate buffers in the same
+    // Myanmar-aware cell model so vim renders through the HTML mirror too.
     applyMyanmarWidth(this.term, {
       collapseSpacingMarks: window.pty?.platform !== "linux",
     });
@@ -282,8 +281,10 @@ class PaneSession {
     this.term.parser.registerOscHandler(0, onOscTitle);
     this.term.parser.registerOscHandler(2, onOscTitle);
     const onAltScreen = (enabled: boolean) => {
+      if (this.usingAltScreen === enabled) return;
       this.usingAltScreen = enabled;
       this.leafEl.classList.toggle("alt-screen", enabled);
+      this.scheduleRender(undefined, undefined, true);
     };
     const altOn = this.term.parser.registerCsiHandler(
       { prefix: "?", final: "h" },
@@ -495,7 +496,6 @@ class PaneSession {
     requestAnimationFrame(() => {
       this.renderScheduled = false;
       if (document.hidden) return;
-      if (this.usingAltScreen) return;
       if (!this.active) return;
       this.renderBuffer();
     });
@@ -626,7 +626,12 @@ class PaneSession {
           curItalic = italic;
         }
 
-        if (c.getWidth() === 0) continue;
+        if (c.getWidth() === 0) {
+          // Combining marks may occupy zero-width cells instead of being
+          // folded into the previous cell, especially in alternate buffers.
+          run += c.getChars();
+          continue;
+        }
 
         run += c.getChars() || " ";
       }
