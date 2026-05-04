@@ -158,7 +158,6 @@ function buildMenu(): void {
         { role: "undo" },
         { role: "redo" },
         { type: "separator" },
-        { role: "cut" },
         shellItem("Copy", isMac ? "Cmd+C" : "Ctrl+Shift+C", "copy"),
         shellItem("Paste", isMac ? "Cmd+V" : "Ctrl+Shift+V", "paste"),
         { role: "selectAll" },
