@@ -7,9 +7,13 @@ import "@xterm/xterm/css/xterm.css";
 // ---- Chrome DOM ------------------------------------------------------
 const tabbar = document.getElementById("tabbar") as HTMLDivElement;
 const newTabBtn = document.getElementById("new-tab") as HTMLButtonElement;
-const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
+const settingsBtn = document.getElementById(
+  "settings-btn",
+) as HTMLButtonElement;
 const wrapper = document.getElementById("terminal-wrapper") as HTMLDivElement;
-const settingsModal = document.getElementById("settings-modal") as HTMLDivElement;
+const settingsModal = document.getElementById(
+  "settings-modal",
+) as HTMLDivElement;
 const settingsCloseBtn = document.getElementById(
   "settings-close",
 ) as HTMLButtonElement;
@@ -52,10 +56,22 @@ tabbar.addEventListener(
 
 // ---- Shared (pure) helpers -------------------------------------------
 const ANSI_COLORS = [
-  "#000000", "#ff6e6e", "#6eff6e", "#ffff6e",
-  "#7c9cfa", "#ff6eff", "#6effff", "#e4e4e4",
-  "#686868", "#ff8b8b", "#8bff8b", "#ffff8b",
-  "#9cb0fa", "#ff8bff", "#8bffff", "#ffffff",
+  "#000000",
+  "#ff6e6e",
+  "#6eff6e",
+  "#ffff6e",
+  "#7c9cfa",
+  "#ff6eff",
+  "#6effff",
+  "#e4e4e4",
+  "#686868",
+  "#ff8b8b",
+  "#8bff8b",
+  "#ffff8b",
+  "#9cb0fa",
+  "#ff8bff",
+  "#8bffff",
+  "#ffffff",
 ];
 
 function get256(code: number): string {
@@ -208,7 +224,10 @@ const DEFAULT_APPEARANCE: AppearancePrefs = {
 };
 
 function clampFontSize(n: number): number {
-  return Math.max(11, Math.min(24, Math.round(n || DEFAULT_APPEARANCE.fontSize)));
+  return Math.max(
+    11,
+    Math.min(24, Math.round(n || DEFAULT_APPEARANCE.fontSize)),
+  );
 }
 
 function isViewMode(v: unknown): v is ViewMode {
@@ -225,7 +244,9 @@ function normalizeAppearance(raw: unknown): AppearancePrefs {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_APPEARANCE };
   const obj = raw as Partial<AppearancePrefs>;
   return {
-    viewMode: isViewMode(obj.viewMode) ? obj.viewMode : DEFAULT_APPEARANCE.viewMode,
+    viewMode: isViewMode(obj.viewMode)
+      ? obj.viewMode
+      : DEFAULT_APPEARANCE.viewMode,
     fontSize: clampFontSize(Number(obj.fontSize)),
     fontFamily: normalizeFontChoice(obj.fontFamily),
   };
@@ -234,7 +255,9 @@ function normalizeAppearance(raw: unknown): AppearancePrefs {
 function loadAppearance(): AppearancePrefs {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
-    return raw ? normalizeAppearance(JSON.parse(raw)) : { ...DEFAULT_APPEARANCE };
+    return raw
+      ? normalizeAppearance(JSON.parse(raw))
+      : { ...DEFAULT_APPEARANCE };
   } catch {
     return { ...DEFAULT_APPEARANCE };
   }
@@ -243,15 +266,17 @@ function loadAppearance(): AppearancePrefs {
 function saveAppearance(prefs: AppearancePrefs): void {
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(prefs));
-  } catch {
-    /* */
+  } catch (e) {
+    console.warn("myanso: failed to save appearance to localStorage", e);
   }
 }
 
 let appearance = loadAppearance();
 
 function quoteFontFamily(name: string): string {
-  return /[",]/.test(name) || /\s/.test(name) ? `"${name.replace(/"/g, '\\"')}"` : name;
+  return /[",]/.test(name) || /\s/.test(name)
+    ? `"${name.replace(/"/g, '\\"')}"`
+    : name;
 }
 
 function buildTerminalFontFamily(selected: string): string {
@@ -274,6 +299,14 @@ function buildTerminalFontFamily(selected: string): string {
     .join(", ");
 }
 
+async function waitForFontsReady(): Promise<void> {
+  try {
+    await document.fonts.ready;
+  } catch {
+    // Ignore readiness failures and fall back to best-effort checks below.
+  }
+}
+
 function isFontAvailable(name: string): boolean {
   try {
     return document.fonts.check(`14px ${quoteFontFamily(name)}`);
@@ -282,14 +315,19 @@ function isFontAvailable(name: string): boolean {
   }
 }
 
-function availableFontChoices(): Array<{ value: FontChoice; label: string }> {
+async function availableFontChoices(): Promise<
+  Array<{ value: FontChoice; label: string }>
+> {
+  await waitForFontsReady();
   return FONT_CHOICES.filter((font) =>
     font.value === "system" ? true : isFontAvailable(font.value),
   );
 }
 
 function fontChoiceForValue(value: string): FontChoice {
-  return FONT_CHOICES.some((font) => font.value === value) ? (value as FontChoice) : "custom";
+  return FONT_CHOICES.some((font) => font.value === value)
+    ? (value as FontChoice)
+    : "custom";
 }
 
 const home = window.pty?.homeDir || "";
@@ -422,18 +460,25 @@ class PaneSession {
       this.usingAltScreen = enabled;
       this.leafEl.classList.toggle("alt-screen", enabled);
     };
-    this.term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
-      if (params.some((p) => p === 47 || p === 1047 || p === 1049)) {
-        onAltScreen(true);
-      }
-      return false;
-    });
-    this.term.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
-      if (params.some((p) => p === 47 || p === 1047 || p === 1049)) {
-        onAltScreen(false);
-      }
-      return false;
-    });
+    const altOn = this.term.parser.registerCsiHandler(
+      { prefix: "?", final: "h" },
+      (params) => {
+        if (params.some((p) => p === 47 || p === 1047 || p === 1049)) {
+          onAltScreen(true);
+        }
+        return false;
+      },
+    );
+    const altOff = this.term.parser.registerCsiHandler(
+      { prefix: "?", final: "l" },
+      (params) => {
+        if (params.some((p) => p === 47 || p === 1047 || p === 1049)) {
+          onAltScreen(false);
+        }
+        return false;
+      },
+    );
+    this.disposers.push(() => altOn.dispose(), () => altOff.dispose());
     this.applyAppearance(appearance);
   }
 
@@ -654,35 +699,6 @@ class PaneSession {
       const d = this.rowDivs.pop()!;
       this.lastRowHtml.pop();
       this.outputDiv.removeChild(d);
-    }
-  }
-
-  private fitAndResize(): void {
-    if (!this.active) return;
-    try {
-      this.fit.fit();
-    } catch {
-      return;
-    }
-    const { cols, rows } = this.term;
-    window.pty?.resize(this.ptyId, cols, rows);
-    const cellH = (
-      this.term as unknown as {
-        _core: {
-          _renderService?: {
-            dimensions?: { css?: { cell?: { height: number } } };
-          };
-        };
-      }
-    )._core?._renderService?.dimensions?.css?.cell?.height;
-    if (cellH && cellH > 0) {
-      // Always round up. Rounding to nearest can still round a fractional
-      // cell down, which leaves a 1px seam between mirrored rows and shows
-      // up as horizontal stripes in solid-background TUIs like vim/netrw.
-      document.documentElement.style.setProperty(
-        "--cell-h",
-        `${Math.ceil(cellH)}px`,
-      );
     }
   }
 
@@ -994,7 +1010,10 @@ class Tab {
   constructor(
     initial: PaneSession,
     private readonly opts: TabOpts,
-    private readonly onSessionKey: (e: KeyboardEvent, s: PaneSession) => boolean,
+    private readonly onSessionKey: (
+      e: KeyboardEvent,
+      s: PaneSession,
+    ) => boolean,
   ) {
     this.rootEl = document.createElement("div");
     this.rootEl.className = "tab-root inactive";
@@ -1126,9 +1145,7 @@ class Tab {
   }
 
   displayName(): string {
-    return (
-      this.active.session.title || this.active.session.cwd || "shell"
-    );
+    return this.active.session.title || this.active.session.cwd || "shell";
   }
 
   cwdAbsolute(): string | null {
@@ -1241,7 +1258,7 @@ class TabManager {
   }
 
   private get active(): Tab | null {
-    return this.activeId ? this.tabs.get(this.activeId) ?? null : null;
+    return this.activeId ? (this.tabs.get(this.activeId) ?? null) : null;
   }
 
   // Spawns a PTY and constructs a (not-yet-attached) PaneSession. Caller
@@ -1371,9 +1388,7 @@ class TabManager {
   cycleNext(): void {
     if (this.order.length < 2 || !this.activeId) return;
     const idx = this.order.indexOf(this.activeId);
-    const next = this.tabs.get(
-      this.order[(idx + 1) % this.order.length],
-    );
+    const next = this.tabs.get(this.order[(idx + 1) % this.order.length]);
     if (next) this.activate(next);
   }
 
@@ -1574,8 +1589,8 @@ window.pty?.onFullscreen((on) => {
 
 const tabs = new TabManager();
 
-function syncFontChoicesUi(selected: string): void {
-  const choices = availableFontChoices();
+async function syncFontChoicesUi(selected: string): Promise<void> {
+  const choices = await availableFontChoices();
   settingsFontFamily.innerHTML = "";
   for (const choice of choices) {
     const option = document.createElement("option");
@@ -1608,7 +1623,7 @@ function syncSettingsUi(prefs: AppearancePrefs): void {
   settingsViewMode.value = prefs.viewMode;
   settingsFontSize.value = String(prefs.fontSize);
   settingsFontSizeValue.value = String(prefs.fontSize);
-  syncFontChoicesUi(prefs.fontFamily);
+  void syncFontChoicesUi(prefs.fontFamily);
 }
 
 function applyAppearancePrefs(next: AppearancePrefs): void {
@@ -1774,18 +1789,34 @@ wrapper.addEventListener("drop", (e) => {
 
 window.pty?.onMenu((action) => {
   switch (action) {
-    case "new-tab":    void tabs.createTab(); break;
-    case "split-row":  void tabs.splitActive("row"); break;
-    case "split-col":  void tabs.splitActive("col"); break;
-    case "close-pane": tabs.closeActivePane(); break;
-    case "copy":       void tabs.copySelection(); break;
-    case "paste":      void tabs.pasteToActive(); break;
+    case "new-tab":
+      void tabs.createTab();
+      break;
+    case "split-row":
+      void tabs.splitActive("row");
+      break;
+    case "split-col":
+      void tabs.splitActive("col");
+      break;
+    case "close-pane":
+      tabs.closeActivePane();
+      break;
+    case "copy":
+      void tabs.copySelection();
+      break;
+    case "paste":
+      void tabs.pasteToActive();
+      break;
   }
 });
 
 window.pty?.onContextAction((action) => {
   switch (action) {
-    case "copy":  void tabs.copySelection(); break;
-    case "paste": void tabs.pasteToActive(); break;
+    case "copy":
+      void tabs.copySelection();
+      break;
+    case "paste":
+      void tabs.pasteToActive();
+      break;
   }
 });

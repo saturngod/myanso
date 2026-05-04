@@ -29,9 +29,7 @@ let pendingCwd: string | null = null;
 
 // icon.png lives at the project root; app.getAppPath() resolves to that
 // in dev and to the unpacked app dir in production.
-const appIcon = nativeImage.createFromPath(
-  join(app.getAppPath(), "icon.png"),
-);
+const appIcon = nativeImage.createFromPath(join(app.getAppPath(), "icon.png"));
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -153,28 +151,16 @@ function buildMenu(): void {
         // win/linux Ctrl+D is EOF and Ctrl+W is delete-previous-word, so
         // we route those actions through Ctrl+Shift to leave the shell's
         // bindings intact.
-        shellItem(
-          "New Tab",
-          isMac ? "Cmd+T" : "Ctrl+Shift+T",
-          "new-tab",
-        ),
+        shellItem("New Tab", isMac ? "Cmd+T" : "Ctrl+Shift+T", "new-tab"),
         { type: "separator" },
-        shellItem(
-          "Split Right",
-          isMac ? "Cmd+D" : "Ctrl+Shift+D",
-          "split-row",
-        ),
+        shellItem("Split Right", isMac ? "Cmd+D" : "Ctrl+Shift+D", "split-row"),
         shellItem(
           "Split Down",
           isMac ? "Cmd+Shift+D" : "Ctrl+Shift+E",
           "split-col",
         ),
         { type: "separator" },
-        shellItem(
-          "Close Pane",
-          isMac ? "Cmd+W" : "Ctrl+Shift+W",
-          "close-pane",
-        ),
+        shellItem("Close Pane", isMac ? "Cmd+W" : "Ctrl+Shift+W", "close-pane"),
       ],
     },
     {
@@ -208,7 +194,9 @@ app.on("open-file", (event, p) => {
   const cwd = resolveCwd(p);
   if (!cwd) return;
   const target =
-    BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null;
+    BrowserWindow.getFocusedWindow() ??
+    BrowserWindow.getAllWindows()[0] ??
+    null;
   if (target && !target.isDestroyed()) {
     target.webContents.send("app:open-cwd", cwd);
     if (target.isMinimized()) target.restore();
@@ -231,27 +219,24 @@ ipcMain.handle("clipboard:write-text", (_event, text: string) => {
   clipboard.writeText(text);
 });
 
-ipcMain.handle(
-  "terminal:context-menu",
-  (event, opts: { canCopy: boolean }) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (!win || win.isDestroyed()) return;
-    const canPaste = clipboard.readText().length > 0;
-    const menu = Menu.buildFromTemplate([
-      {
-        label: "Copy",
-        enabled: opts.canCopy,
-        click: () => event.sender.send("terminal:context-action", "copy"),
-      },
-      {
-        label: "Paste",
-        enabled: canPaste,
-        click: () => event.sender.send("terminal:context-action", "paste"),
-      },
-    ]);
-    menu.popup({ window: win });
-  },
-);
+ipcMain.handle("terminal:context-menu", (event, opts: { canCopy: boolean }) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return;
+  const canPaste = clipboard.readText().length > 0;
+  const menu = Menu.buildFromTemplate([
+    {
+      label: "Copy",
+      enabled: opts.canCopy,
+      click: () => event.sender.send("terminal:context-action", "copy"),
+    },
+    {
+      label: "Paste",
+      enabled: canPaste,
+      click: () => event.sender.send("terminal:context-action", "paste"),
+    },
+  ]);
+  menu.popup({ window: win });
+});
 
 app.whenReady().then(() => {
   // macOS ignores BrowserWindow.icon for the dock; set it explicitly so
