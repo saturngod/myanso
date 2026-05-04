@@ -59,6 +59,24 @@ const api = {
     ipcRenderer.on("window:fullscreen", listener);
     return () => ipcRenderer.removeListener("window:fullscreen", listener);
   },
+  readClipboardText(): Promise<string> {
+    return ipcRenderer.invoke("clipboard:read-text");
+  },
+  writeClipboardText(text: string): Promise<void> {
+    return ipcRenderer.invoke("clipboard:write-text", text);
+  },
+  showContextMenu(opts: { canCopy: boolean }): Promise<void> {
+    return ipcRenderer.invoke("terminal:context-menu", opts);
+  },
+  onContextAction(cb: (action: "copy" | "paste") => void) {
+    const listener = (
+      _: Electron.IpcRendererEvent,
+      action: "copy" | "paste",
+    ) => cb(action);
+    ipcRenderer.on("terminal:context-action", listener);
+    return () =>
+      ipcRenderer.removeListener("terminal:context-action", listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("pty", api);

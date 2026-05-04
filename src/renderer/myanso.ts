@@ -129,10 +129,14 @@ const isMyanmarMc = (cp: number): boolean =>
   cp === 0x108f ||
   (cp >= 0x109a && cp <= 0x109c);
 
-function applyMyanmarWidth(term: Terminal): void {
+function applyMyanmarWidth(
+  term: Terminal,
+  opts: { collapseSpacingMarks: boolean },
+): void {
   try {
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
+    if (!opts.collapseSpacingMarks) return;
     const v11 = (
       term as unknown as {
         _core: {
@@ -315,6 +319,12 @@ interface PaneSessionOpts {
   onKey(e: KeyboardEvent, s: PaneSession): boolean;
 }
 
+function currentSelectionText(): string {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed) return "";
+  return sel.toString().replace(/\u00a0/g, " ");
+}
+
 class PaneSession {
   readonly ptyId: string;
   readonly leafEl: HTMLDivElement;
@@ -331,7 +341,17 @@ class PaneSession {
   private colorCache = new Map<number, string>();
   private focused = false;
   private renderScheduled = false;
-  private safetyTimer: number | null = null;
+  private renderFull = true;
+  private renderStart: number | null = null;
+  private renderEnd: number | null = null;
+  private resizeScheduled = false;
+  private lastCols = 0;
+  private lastRows = 0;
+  private lastViewportY = -1;
+  private lastCursorRow: number | null = null;
+  private lastResizeCols = 0;
+  private lastResizeRows = 0;
+  private lastCellH = 0;
   private ro: ResizeObserver | null = null;
   private disposers: Array<() => void> = [];
   private active = false;
@@ -350,6 +370,17 @@ class PaneSession {
     this.outputDiv = document.createElement("div");
     this.outputDiv.className = "output";
     this.leafEl.appendChild(this.outputDiv);
+    this.outputDiv.addEventListener("mousedown", (e) => {
+      if (e.button === 0) this.opts.onFocus(this);
+    });
+    this.outputDiv.addEventListener("click", () => {
+      if (!currentSelectionText()) this.focus();
+    });
+    this.outputDiv.addEventListener("contextmenu", (e) => {
+      this.opts.onFocus(this);
+      e.preventDefault();
+      void window.pty?.showContextMenu({ canCopy: !!currentSelectionText() });
+    });
 
     // lineHeight 1.25 → 20 px cell (integer, tiles cleanly, no row seams).
     // Tighter values (1.0 = 16 px) clip Burmese above-base marks like
@@ -365,7 +396,12 @@ class PaneSession {
     });
     this.fit = new FitAddon();
     this.term.loadAddon(this.fit);
-    applyMyanmarWidth(this.term);
+    // Ubuntu bash/readline uses the host wcwidth table while editing the
+    // prompt. There Myanmar spacing marks are one cell, so collapsing them
+    // in xterm makes cursor-left redisplay paint into the prompt.
+    applyMyanmarWidth(this.term, {
+      collapseSpacingMarks: window.pty?.platform !== "linux",
+    });
     this.term.loadAddon(new WebLinksAddon());
 
     this.term.attachCustomKeyEventHandler((e) => this.opts.onKey(e, this));
@@ -409,29 +445,81 @@ class PaneSession {
 
     const onFocus = () => {
       this.focused = true;
-      this.scheduleRender();
+      this.scheduleCursorRender();
       this.opts.onFocus(this);
     };
     const onBlur = () => {
       this.focused = false;
-      this.scheduleRender();
+      this.scheduleCursorRender();
+    };
+    const onVisible = () => {
+      if (!document.hidden && this.active) {
+        this.scheduleRender(undefined, undefined, true);
+      }
     };
     this.term.textarea?.addEventListener("focus", onFocus);
     this.term.textarea?.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVisible);
     this.disposers.push(
       () => this.term.textarea?.removeEventListener("focus", onFocus),
       () => this.term.textarea?.removeEventListener("blur", onBlur),
+      () => document.removeEventListener("visibilitychange", onVisible),
     );
 
-    this.term.onRender(() => this.scheduleRender());
+    const renderDisposable = this.term.onRender((e) =>
+      this.scheduleRender(e.start, e.end),
+    );
+    this.disposers.push(() => renderDisposable.dispose());
   }
 
   // Per-leaf observation: window resize, sibling split, and divider drag
   // all change the leaf's bounds, all funnel through here.
   private setupResize(): void {
     if (this.ro) return;
-    this.ro = new ResizeObserver(() => this.fitAndResize());
+    const doFit = () => {
+      if (this.resizeScheduled) return;
+      this.resizeScheduled = true;
+      requestAnimationFrame(() => {
+        this.resizeScheduled = false;
+        this.fitAndResize();
+      });
+    };
+    this.ro = new ResizeObserver(doFit);
     this.ro.observe(this.leafEl);
+  }
+
+  private fitAndResize(): void {
+    if (!this.active) return;
+    try {
+      this.fit.fit();
+    } catch {
+      return;
+    }
+    const { cols, rows } = this.term;
+    if (cols !== this.lastResizeCols || rows !== this.lastResizeRows) {
+      this.lastResizeCols = cols;
+      this.lastResizeRows = rows;
+      window.pty?.resize(this.ptyId, cols, rows);
+      this.scheduleRender(undefined, undefined, true);
+    }
+    const cellH = (
+      this.term as unknown as {
+        _core: {
+          _renderService?: {
+            dimensions?: { css?: { cell?: { height: number } } };
+          };
+        };
+      }
+    )._core?._renderService?.dimensions?.css?.cell?.height;
+    if (cellH && cellH > 0) {
+      const rounded = Math.round(cellH);
+      if (rounded === this.lastCellH) return;
+      this.lastCellH = rounded;
+      // Round to integer pixel — fractional heights leave 1-px row seams
+      // visible as horizontal stripes in solid-bg apps (htop, vim).
+      document.documentElement.style.setProperty("--cell-h", `${rounded}px`);
+      this.scheduleRender(undefined, undefined, true);
+    }
   }
 
   activate(): void {
@@ -439,10 +527,7 @@ class PaneSession {
     this.active = true;
     this.setupResize();
     this.fitAndResize();
-    if (this.safetyTimer == null) {
-      this.safetyTimer = window.setInterval(() => this.scheduleRender(), 500);
-    }
-    this.scheduleRender();
+    this.scheduleRender(undefined, undefined, true);
   }
 
   deactivate(): void {
@@ -451,10 +536,6 @@ class PaneSession {
     if (this.ro) {
       this.ro.disconnect();
       this.ro = null;
-    }
-    if (this.safetyTimer != null) {
-      clearInterval(this.safetyTimer);
-      this.safetyTimer = null;
     }
   }
 
@@ -510,7 +591,35 @@ class PaneSession {
     return this.cwd;
   }
 
-  scheduleRender(): void {
+  private cursorRenderRow(): number | null {
+    const buffer = this.term.buffer.active;
+    const row = buffer.cursorY + buffer.baseY - buffer.viewportY;
+    return row >= 0 && row < this.term.rows ? row : null;
+  }
+
+  private includeRenderRow(row: number | null): void {
+    if (row == null) return;
+    this.renderStart =
+      this.renderStart == null ? row : Math.min(this.renderStart, row);
+    this.renderEnd =
+      this.renderEnd == null ? row : Math.max(this.renderEnd, row);
+  }
+
+  private scheduleCursorRender(): void {
+    this.includeRenderRow(this.lastCursorRow);
+    this.includeRenderRow(this.cursorRenderRow());
+    this.scheduleRender();
+  }
+
+  scheduleRender(start?: number, end?: number, full = false): void {
+    if (full) {
+      this.renderFull = true;
+    } else if (start != null && end != null) {
+      this.renderStart =
+        this.renderStart == null ? start : Math.min(this.renderStart, start);
+      this.renderEnd =
+        this.renderEnd == null ? end : Math.max(this.renderEnd, end);
+    }
     if (this.renderScheduled) return;
     this.renderScheduled = true;
     requestAnimationFrame(() => {
@@ -584,12 +693,39 @@ class PaneSession {
     const startRow = buffer.viewportY;
     const cursorY = buffer.cursorY + buffer.baseY;
     const cursorX = buffer.cursorX;
+    const cursorRow = cursorY - startRow;
     const cell = buffer.getNullCell();
+    const full =
+      this.renderFull ||
+      this.renderStart == null ||
+      this.renderEnd == null ||
+      cols !== this.lastCols ||
+      rows !== this.lastRows ||
+      startRow !== this.lastViewportY;
 
     this.ensureRowCount(rows);
     this.colorCache.clear();
+    let from: number;
+    let to: number;
+    if (full) {
+      from = 0;
+      to = rows - 1;
+    } else {
+      from = this.renderStart!;
+      to = this.renderEnd!;
+      from = Math.max(0, Math.min(rows - 1, from));
+      to = Math.max(0, Math.min(rows - 1, to));
+      if (this.lastCursorRow != null) {
+        from = Math.min(from, this.lastCursorRow);
+        to = Math.max(to, this.lastCursorRow);
+      }
+      if (cursorRow >= 0 && cursorRow < rows) {
+        from = Math.min(from, cursorRow);
+        to = Math.max(to, cursorRow);
+      }
+    }
 
-    for (let r = 0; r < rows; r++) {
+    for (let r = from; r <= to; r++) {
       const absRow = startRow + r;
       const line = buffer.getLine(absRow);
       if (!line) {
@@ -668,6 +804,14 @@ class PaneSession {
         this.lastRowHtml[r] = html;
       }
     }
+
+    this.renderFull = false;
+    this.renderStart = null;
+    this.renderEnd = null;
+    this.lastCols = cols;
+    this.lastRows = rows;
+    this.lastViewportY = startRow;
+    this.lastCursorRow = cursorRow >= 0 && cursorRow < rows ? cursorRow : null;
   }
 }
 
@@ -756,8 +900,8 @@ function splitLeaf(
   el.appendChild(newSession.leafEl);
 
   // Re-point the old parent's child slot at this new branch — without
-  // this, paneLeaves(tab.root) skips the new sub-tree and PTY output
-  // for the new pane gets dropped because findLeafByPtyId can't see it.
+  // this, paneLeaves(tab.root) skips the new sub-tree and follow-up
+  // bookkeeping cannot see the new pane.
   const oldParent = branch.parent;
   if (oldParent) {
     if (oldParent.a === leaf) oldParent.a = branch;
@@ -835,6 +979,7 @@ interface TabOpts {
   onClose(t: Tab): void;
   onActivateRequest(t: Tab): void;
   onLeafEmpty(t: Tab, leaf: Leaf): void;
+  onLeafClosed(t: Tab, leaf: Leaf): void;
   onTitleChange(t: Tab): void;
 }
 
@@ -947,6 +1092,7 @@ class Tab {
       return;
     }
     const result = removeLeaf(leaf);
+    this.opts.onLeafClosed(this, leaf);
     leaf.session.dispose();
     if (result?.newRoot) this.root = result.newRoot;
     // Pick a new active leaf — first leaf of the surviving subtree.
@@ -977,14 +1123,6 @@ class Tab {
     if (!next) return;
     this.setActiveLeaf(next);
     next.session.focus();
-  }
-
-  findLeafByPtyId(ptyId: string): Leaf | null {
-    return paneLeaves(this.root).find((l) => l.session.ptyId === ptyId) ?? null;
-  }
-
-  hasPtyId(ptyId: string): boolean {
-    return this.findLeafByPtyId(ptyId) !== null;
   }
 
   displayName(): string {
@@ -1060,6 +1198,8 @@ class Tab {
 
 class TabManager {
   private tabs = new Map<string, Tab>(); // keyed by first ptyId in tab
+  private leavesByPtyId = new Map<string, Leaf>();
+  private tabsByPtyId = new Map<string, Tab>();
   private order: string[] = [];
   private activeId: string | null = null;
 
@@ -1068,23 +1208,36 @@ class TabManager {
     if (!pty) return;
 
     pty.onData((id, data) => {
-      const owner = this.findTabByPtyId(id);
-      const leaf = owner?.findLeafByPtyId(id);
-      leaf?.session.writeToTerm(data);
+      this.leavesByPtyId.get(id)?.session.writeToTerm(data);
     });
     pty.onExit((id) => {
-      const owner = this.findTabByPtyId(id);
-      const leaf = owner?.findLeafByPtyId(id);
+      const owner = this.tabsByPtyId.get(id);
+      const leaf = this.leavesByPtyId.get(id);
       if (!owner || !leaf) return;
       owner.closeLeaf(leaf);
     });
+    document.addEventListener(
+      "keydown",
+      (e) => {
+        if (!this.handleClipboardShortcut(e)) return;
+        e.stopImmediatePropagation();
+      },
+      true,
+    );
   }
 
-  private findTabByPtyId(ptyId: string): Tab | null {
-    for (const t of this.tabs.values()) {
-      if (t.hasPtyId(ptyId)) return t;
-    }
-    return null;
+  private registerLeaf(tab: Tab, leaf: Leaf): void {
+    this.leavesByPtyId.set(leaf.session.ptyId, leaf);
+    this.tabsByPtyId.set(leaf.session.ptyId, tab);
+  }
+
+  private unregisterLeaf(leaf: Leaf): void {
+    this.leavesByPtyId.delete(leaf.session.ptyId);
+    this.tabsByPtyId.delete(leaf.session.ptyId);
+  }
+
+  private unregisterTab(tab: Tab): void {
+    for (const leaf of paneLeaves(tab.root)) this.unregisterLeaf(leaf);
   }
 
   private get active(): Tab | null {
@@ -1131,6 +1284,7 @@ class TabManager {
         onClose: (t) => this.closeTab(t),
         onActivateRequest: (t) => this.activate(t),
         onLeafEmpty: (t) => this.closeTab(t),
+        onLeafClosed: (_t, leaf) => this.unregisterLeaf(leaf),
         onTitleChange: (t) => {
           if (t === this.active) document.title = t.displayName();
         },
@@ -1145,6 +1299,7 @@ class TabManager {
 
     this.tabs.set(ptyId, tab);
     this.order.push(ptyId);
+    this.registerLeaf(tab, tab.active);
     pty.ready(ptyId);
     this.activate(tab);
     return tab;
@@ -1166,7 +1321,8 @@ class TabManager {
     // splitActive places leafEl into the DOM and calls session.attach()
     // before activate(), so the leaf is fully wired before pty.ready
     // releases buffered output.
-    tab.splitActive(dir, session);
+    const leaf = tab.splitActive(dir, session);
+    this.registerLeaf(tab, leaf);
     pty.ready(ptyId);
   }
 
@@ -1192,6 +1348,7 @@ class TabManager {
     for (const leaf of paneLeaves(tab.root)) {
       window.pty?.kill(leaf.session.ptyId);
     }
+    this.unregisterTab(tab);
     tab.dispose();
     this.tabs.delete(id);
     const idx = this.order.indexOf(id);
@@ -1259,6 +1416,8 @@ class TabManager {
     if (!mod) return true;
     if (!isMac && e.metaKey) return true;
 
+    if (this.handleClipboardShortcut(e)) return false;
+
     // Cmd+Opt+Arrow / Ctrl+Alt+Arrow — pane navigation
     if (e.altKey && !e.shiftKey) {
       const dir =
@@ -1310,8 +1469,7 @@ class TabManager {
     // Close pane: Cmd+W (mac) / Ctrl+Shift+W (win/lin)
     if (e.code === "KeyW" && !e.altKey && (isMac ? !e.shiftKey : e.shiftKey)) {
       e.preventDefault();
-      const t = this.active;
-      if (t) t.closeLeaf(t.active);
+      this.closeActivePane();
       return false;
     }
     // Cmd+Shift+] / Cmd+Shift+[ — cycle tabs (Shift required on all platforms)
@@ -1334,9 +1492,40 @@ class TabManager {
     return true;
   }
 
+  private handleClipboardShortcut(e: KeyboardEvent): boolean {
+    if (e.type !== "keydown") return false;
+    if (e.altKey || e.shiftKey) return false;
+    const isMac = window.pty?.platform === "darwin";
+    const mod = isMac ? e.metaKey : e.ctrlKey;
+    if (!mod || (!isMac && e.metaKey)) return false;
+
+    if (e.code === "KeyC") {
+      if (!currentSelectionText()) {
+        if (!isMac) return false;
+        e.preventDefault();
+        return true;
+      }
+      e.preventDefault();
+      void this.copySelection();
+      return true;
+    }
+    if (e.code === "KeyV") {
+      e.preventDefault();
+      void this.pasteToActive();
+      return true;
+    }
+    return false;
+  }
+
   closeActivePane(): void {
     const t = this.active;
-    if (t) t.closeLeaf(t.active);
+    if (!t) return;
+    if (t.active.parent === null) {
+      this.closeTab(t);
+      return;
+    }
+    window.pty?.kill(t.active.session.ptyId);
+    t.closeLeaf(t.active);
   }
 
   // Inject text into the active pane as if typed. Used by file-drop to
@@ -1345,6 +1534,23 @@ class TabManager {
     const t = this.active;
     if (!t) return;
     window.pty?.write(t.active.session.ptyId, data);
+    t.focusActive();
+  }
+
+  async copySelection(): Promise<boolean> {
+    const text = currentSelectionText();
+    if (!text) return false;
+    await window.pty?.writeClipboardText(text);
+    this.active?.focusActive();
+    return true;
+  }
+
+  async pasteToActive(): Promise<void> {
+    const text = await window.pty?.readClipboardText();
+    if (!text) return;
+    const t = this.active;
+    if (!t) return;
+    t.active.session.term.paste(text);
     t.focusActive();
   }
 }
@@ -1572,6 +1778,14 @@ window.pty?.onMenu((action) => {
     case "split-row":  void tabs.splitActive("row"); break;
     case "split-col":  void tabs.splitActive("col"); break;
     case "close-pane": tabs.closeActivePane(); break;
-    case "open-settings": openSettings(); break;
+    case "copy":       void tabs.copySelection(); break;
+    case "paste":      void tabs.pasteToActive(); break;
+  }
+});
+
+window.pty?.onContextAction((action) => {
+  switch (action) {
+    case "copy":  void tabs.copySelection(); break;
+    case "paste": void tabs.pasteToActive(); break;
   }
 });
