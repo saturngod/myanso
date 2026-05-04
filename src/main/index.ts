@@ -93,7 +93,7 @@ function createWindow(): BrowserWindow {
 // reality (a fresh window is just made by main, no renderer plumbing).
 function buildMenu(): void {
   const isMac = process.platform === "darwin";
-  const isDev = !app.isPackaged;
+  const showDevMenuItems = Boolean(process.env.ELECTRON_RENDERER_URL);
 
   // Send an action to the focused window's renderer. The application menu
   // is shared across windows on macOS, so click handlers must look up the
@@ -197,7 +197,7 @@ function buildMenu(): void {
     {
       label: "View",
       submenu: [
-        ...(isDev
+        ...(showDevMenuItems
           ? ([
               { role: "reload" },
               { role: "toggleDevTools" },
