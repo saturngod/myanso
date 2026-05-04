@@ -1,7 +1,7 @@
 {
   "name": "myanso",
   "productName": "Myanso",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Myanso — a Myanmar-aware terminal (Electron + xterm.js).",
   "main": "out/main/index.js",
   "author": "saturngod",
