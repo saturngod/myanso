@@ -114,6 +114,8 @@ function buildMenu(): void {
             submenu: [
               { role: "about" },
               { type: "separator" },
+              shellItem("Settings", "Cmd+,", "open-settings"),
+              { type: "separator" },
               { role: "services" },
               { type: "separator" },
               { role: "hide" },
@@ -132,8 +134,8 @@ function buildMenu(): void {
         { role: "redo" },
         { type: "separator" },
         { role: "cut" },
-        shellItem("Copy", "CmdOrCtrl+C", "copy"),
-        shellItem("Paste", "CmdOrCtrl+V", "paste"),
+        shellItem("Copy", isMac ? "Cmd+C" : "Ctrl+Shift+C", "copy"),
+        shellItem("Paste", isMac ? "Cmd+V" : "Ctrl+Shift+V", "paste"),
         { role: "selectAll" },
       ],
     },
@@ -142,7 +144,7 @@ function buildMenu(): void {
       submenu: [
         {
           label: "New Window",
-          accelerator: "CmdOrCtrl+N",
+          accelerator: isMac ? "Cmd+N" : "Ctrl+Shift+N",
           click: () => {
             createWindow();
           },
@@ -166,8 +168,6 @@ function buildMenu(): void {
     {
       label: "View",
       submenu: [
-        shellItem("Settings", "CmdOrCtrl+,", "open-settings"),
-        { type: "separator" },
         ...(isDev
           ? ([
               { role: "reload" },
