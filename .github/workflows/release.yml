@@ -2,9 +2,8 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -92,15 +91,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Read version from package.json
-        id: version
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -110,8 +100,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Myanso v${{ steps.version.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          name: Myanso ${{ github.ref_name }}
           draft: false
           prerelease: false
           fail_on_unmatched_files: false
