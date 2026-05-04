@@ -67,6 +67,8 @@ function get256(code: number): string {
   return `rgb(${m(r)},${m(g)},${m(b)})`;
 }
 
+const ANSI_256_COLORS = Array.from({ length: 256 }, (_, i) => get256(i));
+
 const MODE_ANSI16 = 16777216;
 const MODE_256 = 33554432;
 const MODE_RGB = 50331648;
@@ -74,7 +76,7 @@ const MODE_RGB = 50331648;
 function cssColor(color: number, mode: number): string | null {
   if (mode === 0) return null;
   if (mode === MODE_ANSI16) return ANSI_COLORS[color];
-  if (mode === MODE_256) return get256(color);
+  if (mode === MODE_256) return ANSI_256_COLORS[color];
   if (mode === MODE_RGB) {
     const r = (color >> 16) & 255;
     const g = (color >> 8) & 255;
@@ -179,6 +181,12 @@ interface PaneSessionOpts {
   onKey(e: KeyboardEvent, s: PaneSession): boolean;
 }
 
+type RowRender =
+  | { kind: "html"; value: string }
+  | { kind: "text"; value: string };
+
+const BLANK_ROW: RowRender = { kind: "text", value: " " };
+
 function currentSelectionText(): string {
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed) return "";
@@ -197,8 +205,7 @@ class PaneSession {
   title = "";
 
   private rowDivs: HTMLDivElement[] = [];
-  private lastRowHtml: string[] = [];
-  private colorCache = new Map<number, string>();
+  private lastRowRender: RowRender[] = [];
   private focused = false;
   private renderScheduled = false;
   private renderFull = true;
@@ -501,30 +508,56 @@ class PaneSession {
     });
   }
 
-  private cachedColor(color: number, mode: number): string | null {
-    if (mode === 0) return null;
-    const key = mode | color;
-    const hit = this.colorCache.get(key);
-    if (hit !== undefined) return hit;
-    const v = cssColor(color, mode);
-    if (v !== null) this.colorCache.set(key, v);
-    return v;
+  private cellColor(color: number, mode: number): string | null {
+    return cssColor(color, mode);
   }
 
   private ensureRowCount(rows: number): void {
     while (this.rowDivs.length < rows) {
       const d = document.createElement("div");
       d.className = "line";
-      d.innerHTML = " ";
+      d.textContent = " ";
       this.outputDiv.appendChild(d);
       this.rowDivs.push(d);
-      this.lastRowHtml.push(" ");
+      this.lastRowRender.push(BLANK_ROW);
     }
     while (this.rowDivs.length > rows) {
       const d = this.rowDivs.pop()!;
-      this.lastRowHtml.pop();
+      this.lastRowRender.pop();
       this.outputDiv.removeChild(d);
     }
+  }
+
+  private setRowRender(row: number, next: RowRender): void {
+    const prev = this.lastRowRender[row];
+    if (prev?.kind === next.kind && prev.value === next.value) return;
+    const rowDiv = this.rowDivs[row];
+    if (next.kind === "text") rowDiv.textContent = next.value;
+    else rowDiv.innerHTML = next.value;
+    this.lastRowRender[row] = next;
+  }
+
+  private rotateRowsForScroll(delta: number): { from: number; to: number } {
+    const count = Math.abs(delta);
+    if (delta > 0) {
+      for (let i = 0; i < count; i++) {
+        const rowDiv = this.rowDivs.shift()!;
+        const rowRender = this.lastRowRender.shift()!;
+        this.rowDivs.push(rowDiv);
+        this.lastRowRender.push(rowRender);
+        this.outputDiv.appendChild(rowDiv);
+      }
+      return { from: this.rowDivs.length - count, to: this.rowDivs.length - 1 };
+    }
+
+    for (let i = 0; i < count; i++) {
+      const rowDiv = this.rowDivs.pop()!;
+      const rowRender = this.lastRowRender.pop()!;
+      this.rowDivs.unshift(rowDiv);
+      this.lastRowRender.unshift(rowRender);
+      this.outputDiv.insertBefore(rowDiv, this.outputDiv.firstChild);
+    }
+    return { from: 0, to: count - 1 };
   }
 
   private renderBuffer(): void {
@@ -536,29 +569,53 @@ class PaneSession {
     const cursorX = buffer.cursorX;
     const cursorRow = cursorY - startRow;
     const cell = buffer.getNullCell();
+    const hasDirtyRange = this.renderStart != null && this.renderEnd != null;
+    const sizeChanged = cols !== this.lastCols || rows !== this.lastRows;
+    const viewportDelta = startRow - this.lastViewportY;
+    const canRotateForScroll =
+      !this.renderFull &&
+      !sizeChanged &&
+      this.lastViewportY >= 0 &&
+      viewportDelta !== 0 &&
+      Math.abs(viewportDelta) < rows;
     const full =
       this.renderFull ||
-      this.renderStart == null ||
-      this.renderEnd == null ||
-      cols !== this.lastCols ||
-      rows !== this.lastRows ||
-      startRow !== this.lastViewportY;
+      sizeChanged ||
+      (!hasDirtyRange && !canRotateForScroll) ||
+      (startRow !== this.lastViewportY && !canRotateForScroll);
 
     this.ensureRowCount(rows);
-    this.colorCache.clear();
     let from: number;
     let to: number;
     if (full) {
       from = 0;
       to = rows - 1;
     } else {
-      from = this.renderStart!;
-      to = this.renderEnd!;
+      if (canRotateForScroll) {
+        const exposed = this.rotateRowsForScroll(viewportDelta);
+        from = exposed.from;
+        to = exposed.to;
+      } else {
+        from = rows;
+        to = -1;
+      }
+      if (hasDirtyRange) {
+        from = Math.min(from, this.renderStart!);
+        to = Math.max(to, this.renderEnd!);
+      }
       from = Math.max(0, Math.min(rows - 1, from));
       to = Math.max(0, Math.min(rows - 1, to));
-      if (this.lastCursorRow != null) {
-        from = Math.min(from, this.lastCursorRow);
-        to = Math.max(to, this.lastCursorRow);
+      const previousCursorRow =
+        canRotateForScroll && this.lastCursorRow != null
+          ? this.lastCursorRow - viewportDelta
+          : this.lastCursorRow;
+      if (
+        previousCursorRow != null &&
+        previousCursorRow >= 0 &&
+        previousCursorRow < rows
+      ) {
+        from = Math.min(from, previousCursorRow);
+        to = Math.max(to, previousCursorRow);
       }
       if (cursorRow >= 0 && cursorRow < rows) {
         from = Math.min(from, cursorRow);
@@ -570,13 +627,40 @@ class PaneSession {
       const absRow = startRow + r;
       const line = buffer.getLine(absRow);
       if (!line) {
-        if (this.lastRowHtml[r] !== " ") {
-          this.rowDivs[r].innerHTML = " ";
-          this.lastRowHtml[r] = " ";
-        }
+        this.setRowRender(r, BLANK_ROW);
         continue;
       }
       const isCursorLine = absRow === cursorY;
+
+      if (!isCursorLine) {
+        let text = "";
+        let textEnd = 0;
+        let plain = true;
+        for (let x = 0; x < cols; x++) {
+          const c = line.getCell(x, cell);
+          if (!c) continue;
+          if (
+            c.getFgColorMode() !== 0 ||
+            c.getBgColorMode() !== 0 ||
+            c.isBold() !== 0 ||
+            c.isItalic() !== 0
+          ) {
+            plain = false;
+            break;
+          }
+          const chars =
+            c.getWidth() === 0 ? c.getChars() : c.getChars() || " ";
+          text += chars;
+          if (chars && chars !== " ") textEnd = text.length;
+        }
+        if (plain) {
+          this.setRowRender(r, {
+            kind: "text",
+            value: textEnd > 0 ? text.slice(0, textEnd) : " ",
+          });
+          continue;
+        }
+      }
 
       let html = "";
       let run = "";
@@ -608,8 +692,8 @@ class PaneSession {
           continue;
         }
 
-        const fg = this.cachedColor(c.getFgColor(), c.getFgColorMode());
-        const bg = this.cachedColor(c.getBgColor(), c.getBgColorMode());
+        const fg = this.cellColor(c.getFgColor(), c.getFgColorMode());
+        const bg = this.cellColor(c.getBgColor(), c.getBgColorMode());
         const bold = c.isBold() !== 0;
         const italic = c.isItalic() !== 0;
 
@@ -645,10 +729,7 @@ class PaneSession {
 
       if (!html) html = " ";
 
-      if (html !== this.lastRowHtml[r]) {
-        this.rowDivs[r].innerHTML = html;
-        this.lastRowHtml[r] = html;
-      }
+      this.setRowRender(r, { kind: "html", value: html });
     }
 
     this.renderFull = false;
