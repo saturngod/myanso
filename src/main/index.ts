@@ -113,6 +113,13 @@ function buildMenu(): void {
     registerAccelerator: false,
     click: () => sendToFocused(action),
   });
+  const shellActionItem = (
+    label: string,
+    action: string,
+  ): Electron.MenuItemConstructorOptions => ({
+    label,
+    click: () => sendToFocused(action),
+  });
 
   const settingsItem = (
     accelerator: string,
@@ -179,11 +186,13 @@ function buildMenu(): void {
         // bindings intact.
         shellItem("New Tab", isMac ? "Cmd+T" : "Ctrl+Shift+T", "new-tab"),
         { type: "separator" },
-        shellItem("Split Right", isMac ? "Cmd+D" : "Ctrl+Shift+D", "split-row"),
+        shellActionItem("Split Left", "split-left"),
+        shellItem("Split Right", isMac ? "Cmd+D" : "Ctrl+Shift+D", "split-right"),
+        shellActionItem("Split Up", "split-up"),
         shellItem(
           "Split Down",
           isMac ? "Cmd+Shift+D" : "Ctrl+Shift+E",
-          "split-col",
+          "split-down",
         ),
         { type: "separator" },
         shellItem("Close Pane", isMac ? "Cmd+W" : "Ctrl+Shift+W", "close-pane"),
@@ -247,16 +256,36 @@ ipcMain.handle("terminal:context-menu", (event, opts: { canCopy: boolean }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win || win.isDestroyed()) return;
   const canPaste = clipboard.readText().length > 0;
+  const sendContextAction = (action: string) => {
+    event.sender.send("terminal:context-action", action);
+  };
   const menu = Menu.buildFromTemplate([
     {
       label: "Copy",
       enabled: opts.canCopy,
-      click: () => event.sender.send("terminal:context-action", "copy"),
+      click: () => sendContextAction("copy"),
     },
     {
       label: "Paste",
       enabled: canPaste,
-      click: () => event.sender.send("terminal:context-action", "paste"),
+      click: () => sendContextAction("paste"),
+    },
+    { type: "separator" },
+    {
+      label: "Split Left",
+      click: () => sendContextAction("split-left"),
+    },
+    {
+      label: "Split Right",
+      click: () => sendContextAction("split-right"),
+    },
+    {
+      label: "Split Bottom",
+      click: () => sendContextAction("split-bottom"),
+    },
+    {
+      label: "Split Up",
+      click: () => sendContextAction("split-up"),
     },
   ]);
   menu.popup({ window: win });
