@@ -1,14 +1,52 @@
 import { ipcMain, WebContents } from "electron";
 import { spawn as spawnPty, IPty } from "node-pty";
+import { existsSync } from "node:fs";
 import os from "node:os";
+import { delimiter, join } from "node:path";
 
 // $SHELL is unset on Windows and inside some Linux desktop launchers, so
 // fall back per platform: zsh is the macOS default since Catalina; bash
 // is universal on Linux; PowerShell on Windows.
 function defaultShell(): string {
-  if (process.platform === "win32") return "powershell.exe";
+  if (process.platform === "win32") return windowsShell();
   if (process.platform === "darwin") return "/bin/zsh";
   return "/bin/bash";
+}
+
+function windowsShell(): string {
+  return findPowerShell7() ?? "powershell.exe";
+}
+
+function findPowerShell7(): string | null {
+  if (commandOnPath("pwsh.exe")) return "pwsh.exe";
+
+  const candidates = [
+    process.env.ProgramFiles &&
+      join(process.env.ProgramFiles, "PowerShell", "7", "pwsh.exe"),
+    process.env["ProgramFiles(x86)"] &&
+      join(process.env["ProgramFiles(x86)"], "PowerShell", "7", "pwsh.exe"),
+    process.env.LOCALAPPDATA &&
+      join(process.env.LOCALAPPDATA, "Microsoft", "PowerShell", "7", "pwsh.exe"),
+    process.env.LOCALAPPDATA &&
+      join(process.env.LOCALAPPDATA, "Programs", "PowerShell", "7", "pwsh.exe"),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  return null;
+}
+
+function commandOnPath(command: string): boolean {
+  return (process.env.PATH ?? process.env.Path ?? "")
+    .split(delimiter)
+    .filter(Boolean)
+    .some((dir) => existsSync(join(unquotePathEntry(dir), command)));
+}
+
+function unquotePathEntry(pathEntry: string): string {
+  return pathEntry.replace(/^"(.+)"$/, "$1");
 }
 
 // `npm run` clobbers SHELL with its non-interactive script-shell (default
@@ -17,6 +55,8 @@ function defaultShell(): string {
 // .../sh as "no real shell set" and use the platform default. A user with
 // fish/elvish at SHELL=/usr/local/bin/fish still gets honored.
 function resolveShell(): string {
+  if (process.platform === "win32") return defaultShell();
+
   const s = process.env.SHELL;
   if (s && !/\/sh$/.test(s)) return s;
   return defaultShell();
