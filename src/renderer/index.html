@@ -302,6 +302,42 @@
                 line-height: inherit;
                 vertical-align: top;
             }
+            .term-draw {
+                display: inline-block;
+                position: relative;
+                width: 1ch;
+                height: 100%;
+                line-height: inherit;
+                vertical-align: top;
+                overflow: hidden;
+                color: transparent;
+            }
+            .term-draw::before {
+                content: "";
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                background: var(--draw-color, var(--fg));
+            }
+            .term-rule-v::before {
+                left: calc((100% - var(--draw-w, 1px)) / 2);
+                width: var(--draw-w, 1px);
+            }
+            .term-rule-v-double::before {
+                left: calc(50% - 3px);
+                width: 5px;
+                background: transparent;
+                border-left: 1px solid var(--draw-color, var(--fg));
+                border-right: 1px solid var(--draw-color, var(--fg));
+            }
+            .term-block-left::before {
+                left: 0;
+                width: var(--draw-w, 100%);
+            }
+            .term-block-right::before {
+                right: 0;
+                width: var(--draw-w, 50%);
+            }
             .cursor {
                 background: var(--fg);
                 color: var(--bg);

@@ -95,6 +95,99 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+type DrawableCell = {
+  className: string;
+  style: string[];
+};
+
+function drawableCell(ch: string): DrawableCell | null {
+  switch (ch) {
+    case "\u2502": // light vertical
+    case "\u2506": // light triple dash vertical
+    case "\u250a": // light quadruple dash vertical
+    case "\u254e": // light double dash vertical
+      return { className: "term-rule-v", style: ["--draw-w:1px"] };
+    case "\u2503": // heavy vertical
+    case "\u2507": // heavy triple dash vertical
+    case "\u250b": // heavy quadruple dash vertical
+    case "\u254f": // heavy double dash vertical
+      return { className: "term-rule-v", style: ["--draw-w:2px"] };
+    case "\u2551": // double vertical
+      return { className: "term-rule-v-double", style: [] };
+    case "\u2588": // full block
+      return { className: "term-block-left", style: ["--draw-w:100%"] };
+    case "\u2589": // left seven eighths block
+      return { className: "term-block-left", style: ["--draw-w:87.5%"] };
+    case "\u258a": // left three quarters block
+      return { className: "term-block-left", style: ["--draw-w:75%"] };
+    case "\u258b": // left five eighths block
+      return { className: "term-block-left", style: ["--draw-w:62.5%"] };
+    case "\u258c": // left half block
+      return { className: "term-block-left", style: ["--draw-w:50%"] };
+    case "\u258d": // left three eighths block
+      return { className: "term-block-left", style: ["--draw-w:37.5%"] };
+    case "\u258e": // left one quarter block
+      return { className: "term-block-left", style: ["--draw-w:25%"] };
+    case "\u258f": // left one eighth block
+      return { className: "term-block-left", style: ["--draw-w:12.5%"] };
+    case "\u2590": // right half block
+      return { className: "term-block-right", style: ["--draw-w:50%"] };
+    default:
+      return null;
+  }
+}
+
+function hasDrawableCell(text: string): boolean {
+  for (const ch of text) {
+    if (drawableCell(ch)) return true;
+  }
+  return false;
+}
+
+function stylePartsForRun(
+  fg: string | null,
+  bg: string | null,
+  bold: boolean,
+  italic: boolean,
+  dim: boolean,
+): string[] {
+  const parts: string[] = [];
+  if (dim) parts.push(`color:${dimColor(fg)}`);
+  else if (fg) parts.push(`color:${fg}`);
+  if (bg) parts.push(`background:${bg}`);
+  if (bold) parts.push("font-weight:bold");
+  if (italic) parts.push("font-style:italic");
+  return parts;
+}
+
+function wrapStyledText(
+  text: string,
+  fg: string | null,
+  bg: string | null,
+  bold: boolean,
+  italic: boolean,
+  dim: boolean,
+): string {
+  if (!text) return "";
+  const parts = stylePartsForRun(fg, bg, bold, italic, dim);
+  if (parts.length === 0) return escapeHtml(text);
+  const classAttr = bg ? ' class="bg-run"' : "";
+  return `<span${classAttr} style="${parts.join(";")}">${escapeHtml(text)}</span>`;
+}
+
+function wrapDrawableCell(
+  ch: string,
+  cell: DrawableCell,
+  fg: string | null,
+  bg: string | null,
+  dim: boolean,
+): string {
+  const drawColor = dim ? dimColor(fg) : (fg ?? activeTheme.foreground);
+  const parts = [`--draw-color:${drawColor}`, ...cell.style];
+  if (bg) parts.push(`background:${bg}`);
+  return `<span class="term-draw ${cell.className}" style="${parts.join(";")}">${escapeHtml(ch)}</span>`;
+}
+
 function wrapRun(
   text: string,
   fg: string | null,
@@ -104,15 +197,26 @@ function wrapRun(
   dim: boolean,
 ): string {
   if (!text) return "";
-  if (!fg && !bg && !bold && !italic && !dim) return escapeHtml(text);
-  const parts: string[] = [];
-  if (dim) parts.push(`color:${dimColor(fg)}`);
-  else if (fg) parts.push(`color:${fg}`);
-  if (bg) parts.push(`background:${bg}`);
-  if (bold) parts.push("font-weight:bold");
-  if (italic) parts.push("font-style:italic");
-  const classAttr = bg ? ' class="bg-run"' : "";
-  return `<span${classAttr} style="${parts.join(";")}">${escapeHtml(text)}</span>`;
+  let html = "";
+  let plain = "";
+  const flushPlain = () => {
+    if (!plain) return;
+    html += wrapStyledText(plain, fg, bg, bold, italic, dim);
+    plain = "";
+  };
+
+  for (const ch of text) {
+    const cell = drawableCell(ch);
+    if (!cell) {
+      plain += ch;
+      continue;
+    }
+    flushPlain();
+    html += wrapDrawableCell(ch, cell, fg, bg, dim);
+  }
+
+  flushPlain();
+  return html;
 }
 
 const isMyanmarMc = (cp: number): boolean =>
@@ -197,6 +301,7 @@ type RowRender =
   | { kind: "text"; value: string };
 
 const BLANK_ROW: RowRender = { kind: "text", value: " " };
+type MouseEncoding = "default" | "sgr" | "sgr-pixels";
 
 function currentSelectionText(): string {
   const sel = window.getSelection();
@@ -231,10 +336,12 @@ class PaneSession {
   private lastResizeRows = 0;
   private lastCellH = 0;
   private wheelAccum = 0;
+  private measureEl: HTMLSpanElement | null = null;
   private ro: ResizeObserver | null = null;
   private disposers: Array<() => void> = [];
   private active = false;
   private usingAltScreen = false;
+  private mouseEncoding: MouseEncoding = "default";
 
   constructor(private readonly opts: PaneSessionOpts) {
     this.ptyId = opts.ptyId;
@@ -262,10 +369,9 @@ class PaneSession {
     });
     // The .output mirror only paints the current viewport, and xterm's real
     // scrollback lives in the hidden brain (pointer-events:none), so the
-    // wheel never reaches it. Drive scrolling ourselves: in the normal
-    // buffer, move xterm's viewport into scrollback and re-render; in alt
-    // screen (vim/less/man) there's no scrollback, so forward the wheel as
-    // arrow keys the app reads — matching iTerm/Ghostty.
+    // wheel never reaches it. Drive scrolling ourselves: mouse-aware TUIs get
+    // xterm wheel reports; otherwise normal buffer scrolls xterm scrollback,
+    // and alt-screen apps receive cursor keys as a compatibility fallback.
     this.outputDiv.addEventListener(
       "wheel",
       (e) => this.onWheel(e),
@@ -321,6 +427,8 @@ class PaneSession {
         if (params.some((p) => p === 47 || p === 1047 || p === 1049)) {
           onAltScreen(true);
         }
+        if (params.some((p) => p === 1006)) this.mouseEncoding = "sgr";
+        if (params.some((p) => p === 1016)) this.mouseEncoding = "sgr-pixels";
         return false;
       },
     );
@@ -329,6 +437,9 @@ class PaneSession {
       (params) => {
         if (params.some((p) => p === 47 || p === 1047 || p === 1049)) {
           onAltScreen(false);
+        }
+        if (params.some((p) => p === 1006 || p === 1016)) {
+          this.mouseEncoding = "default";
         }
         return false;
       },
@@ -410,12 +521,45 @@ class PaneSession {
     this.ro.observe(this.leafEl);
   }
 
+  // xterm rounds its cell width to whole device pixels for the FitAddon, but
+  // the .output mirror lays glyphs out at their true fractional advance via
+  // white-space:pre. On displays where the rounded width is narrower than the
+  // real advance, cols*advance overflows the pane and the last column(s) clip
+  // (visible in full-width TUIs like opencode). Measure the real advance from
+  // the mirror's own font so cols never exceeds what actually fits.
+  private measuredCellWidth(): number {
+    if (!this.measureEl) {
+      const el = document.createElement("span");
+      el.style.cssText =
+        "position:absolute;visibility:hidden;white-space:pre;top:0;left:-9999px;";
+      el.textContent = "M".repeat(100);
+      this.outputDiv.appendChild(el);
+      this.measureEl = el;
+    }
+    const w = this.measureEl.getBoundingClientRect().width;
+    return w > 0 ? w / 100 : 0;
+  }
+
   private fitAndResize(): void {
     if (!this.active) return;
     try {
       this.fit.fit();
     } catch {
       return;
+    }
+    // Re-derive cols from the real rendered advance so the .output never
+    // overflows. Keep the FitAddon's rows; only the column count is at risk.
+    const availW = this.outputDiv.getBoundingClientRect().width;
+    const cellW = this.measuredCellWidth();
+    if (availW > 0 && cellW > 0) {
+      const realCols = Math.max(1, Math.floor(availW / cellW));
+      if (realCols !== this.term.cols) {
+        try {
+          this.term.resize(realCols, this.term.rows);
+        } catch {
+          /* */
+        }
+      }
     }
     const { cols, rows } = this.term;
     if (cols !== this.lastResizeCols || rows !== this.lastResizeRows) {
@@ -476,6 +620,7 @@ class PaneSession {
     } catch {
       /* */
     }
+    this.measureEl = null;
     this.leafEl.remove();
   }
 
@@ -502,6 +647,7 @@ class PaneSession {
     const lines = this.wheelLines(e);
     if (lines === 0) return;
     e.preventDefault();
+    if (this.sendMouseWheel(e, lines)) return;
     if (this.usingAltScreen) {
       const seq = lines < 0 ? "\x1b[A" : "\x1b[B";
       window.pty?.write(this.ptyId, seq.repeat(Math.abs(lines)));
@@ -509,6 +655,97 @@ class PaneSession {
     }
     this.term.scrollLines(lines); // negative = up into scrollback
     this.scheduleRender();
+  }
+
+  private sendMouseWheel(e: WheelEvent, lines: number): boolean {
+    const mode = this.term.modes.mouseTrackingMode;
+    if (mode === "none" || mode === "x10") return false;
+
+    const coords = this.mouseCoords(e);
+    if (!coords) return false;
+
+    const directionCode = lines < 0 ? 0 : 1;
+    let code = 64 + directionCode;
+    if (e.shiftKey) code += 4;
+    if (e.altKey) code += 8;
+    if (e.ctrlKey) code += 16;
+
+    const count = Math.min(Math.abs(lines), 32);
+    const seq =
+      this.mouseEncoding === "sgr" || this.mouseEncoding === "sgr-pixels"
+        ? this.sgrMouseWheel(code, coords)
+        : this.defaultMouseWheel(code, coords);
+    if (!seq) return false;
+
+    window.pty?.write(this.ptyId, seq.repeat(count));
+    return true;
+  }
+
+  private mouseCoords(e: WheelEvent): {
+    col: number;
+    row: number;
+    x: number;
+    y: number;
+  } | null {
+    const rect = this.outputDiv.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+
+    const cell = (
+      this.term as unknown as {
+        _core?: {
+          _renderService?: {
+            dimensions?: {
+              css?: {
+                cell?: { width?: number; height?: number };
+              };
+            };
+          };
+        };
+      }
+    )._core?._renderService?.dimensions?.css?.cell;
+    const cellW =
+      cell?.width && cell.width > 0 ? cell.width : rect.width / this.term.cols;
+    const cellH =
+      cell?.height && cell.height > 0
+        ? cell.height
+        : this.lastCellH || rect.height / this.term.rows;
+    if (cellW <= 0 || cellH <= 0) return null;
+
+    const localX = Math.max(0, Math.min(rect.width - 1, e.clientX - rect.left));
+    const localY = Math.max(0, Math.min(rect.height - 1, e.clientY - rect.top));
+    const col = Math.max(
+      1,
+      Math.min(this.term.cols, Math.floor(localX / cellW) + 1),
+    );
+    const row = Math.max(
+      1,
+      Math.min(this.term.rows, Math.floor(localY / cellH) + 1),
+    );
+
+    return {
+      col,
+      row,
+      x: Math.max(1, Math.round(localX) + 1),
+      y: Math.max(1, Math.round(localY) + 1),
+    };
+  }
+
+  private sgrMouseWheel(
+    code: number,
+    coords: { col: number; row: number; x: number; y: number },
+  ): string {
+    const x = this.mouseEncoding === "sgr-pixels" ? coords.x : coords.col;
+    const y = this.mouseEncoding === "sgr-pixels" ? coords.y : coords.row;
+    return `\x1b[<${code};${x};${y}M`;
+  }
+
+  private defaultMouseWheel(
+    code: number,
+    coords: { col: number; row: number },
+  ): string | null {
+    const params = [code + 32, coords.col + 32, coords.row + 32];
+    if (params.some((p) => p > 255)) return null;
+    return `\x1b[M${String.fromCharCode(...params)}`;
   }
 
   writeToTerm(data: string): void {
@@ -725,6 +962,10 @@ class PaneSession {
           }
           const chars =
             c.getWidth() === 0 ? c.getChars() : c.getChars() || " ";
+          if (hasDrawableCell(chars)) {
+            plain = false;
+            break;
+          }
           text += chars;
           if (chars && chars !== " ") textEnd = text.length;
         }
