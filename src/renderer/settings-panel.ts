@@ -4,6 +4,8 @@ import {
   clampFontSize,
   DEFAULT_APPEARANCE,
   normalizeAppearance,
+  TERMINAL_THEMES,
+  themeById,
   VIEW_MODE_LINE_HEIGHT,
   type AppearancePrefs,
 } from "./appearance";
@@ -26,6 +28,9 @@ function byId<T extends HTMLElement>(id: string): T {
 export function initSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
   const settingsModal = byId<HTMLDivElement>("settings-modal");
   const settingsCloseBtn = byId<HTMLButtonElement>("settings-close");
+  const settingsTheme = byId<HTMLSelectElement>("settings-theme");
+  const settingsThemeSample = byId<HTMLDivElement>("settings-theme-sample");
+  const settingsThemeSwatches = byId<HTMLDivElement>("settings-theme-swatches");
   const settingsViewMode = byId<HTMLSelectElement>("settings-view-mode");
   const settingsFontSize = byId<HTMLInputElement>("settings-font-size");
   const settingsFontSizeValue = byId<HTMLInputElement>(
@@ -50,11 +55,19 @@ export function initSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
   let cachedChoices: Array<{ value: string; label: string }> | null = null;
   let lastChoicesSnapshot: string | null = null;
 
+  for (const theme of TERMINAL_THEMES) {
+    const option = document.createElement("option");
+    option.value = theme.id;
+    option.textContent = theme.label;
+    settingsTheme.appendChild(option);
+  }
+
   function prefsEqual(a: AppearancePrefs, b: AppearancePrefs): boolean {
     return (
       a.viewMode === b.viewMode &&
       a.fontSize === b.fontSize &&
-      a.fontFamily === b.fontFamily
+      a.fontFamily === b.fontFamily &&
+      a.theme === b.theme
     );
   }
 
@@ -118,7 +131,26 @@ export function initSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
     settingsPreview.style.lineHeight = String(VIEW_MODE_LINE_HEIGHT[prefs.viewMode]);
   }
 
+  function updateThemeSample(themeId: string): void {
+    const theme = themeById(themeId);
+    settingsThemeSample.style.setProperty("--theme-bg", theme.background);
+    settingsThemeSample.style.setProperty("--theme-fg", theme.foreground);
+    settingsThemeSample.style.setProperty("--theme-muted", theme.ui.muted);
+    settingsThemeSample.style.setProperty("--theme-accent", theme.ui.accent);
+    settingsThemeSample.style.borderColor = theme.ui.border;
+
+    const swatches = document.createDocumentFragment();
+    for (const color of theme.ansi) {
+      const swatch = document.createElement("span");
+      swatch.className = "theme-swatch";
+      swatch.style.background = color;
+      swatches.appendChild(swatch);
+    }
+    settingsThemeSwatches.replaceChildren(swatches);
+  }
+
   function syncControlsFromPrefs(prefs: AppearancePrefs): void {
+    settingsTheme.value = prefs.theme;
     settingsViewMode.value = prefs.viewMode;
     settingsFontSize.value = String(prefs.fontSize);
     settingsFontSizeValue.value = String(prefs.fontSize);
@@ -129,6 +161,7 @@ export function initSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
     pending = normalizeAppearance(next);
     syncControlsFromPrefs(pending);
     updatePreview(pending);
+    updateThemeSample(pending.theme);
     syncApplyButton();
   }
 
@@ -167,6 +200,7 @@ export function initSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
     pending = { ...lastApplied };
     syncControlsFromPrefs(pending);
     updatePreview(pending);
+    updateThemeSample(pending.theme);
     void syncFontChoicesUi(pending.fontFamily);
     syncApplyButton();
     settingsModal.hidden = false;
@@ -193,6 +227,9 @@ export function initSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
   settingsCloseBtn.addEventListener("click", () => close());
   settingsModal.addEventListener("click", (e) => {
     if (e.target === settingsModal) close();
+  });
+  settingsTheme.addEventListener("change", () => {
+    markDirty({ ...pending, theme: settingsTheme.value });
   });
   settingsViewMode.addEventListener("change", () => {
     markDirty({

@@ -35,6 +35,20 @@
                 --border: #2a2d38;
                 --tab-bg: #1a1c24;
                 --tab-bg-active: #15171e;
+                --chrome-top: #1e2029;
+                --chrome-bottom: #191b23;
+                --panel-top: #1d2029;
+                --panel-bottom: #15171e;
+                --modal-overlay: rgba(8, 10, 14, 0.66);
+                --pane-dim: rgba(21, 23, 30, 0.55);
+                --control-bg: rgba(255, 255, 255, 0.04);
+                --control-hover: rgba(255, 255, 255, 0.08);
+                --preview-bg: rgba(0, 0, 0, 0.35);
+                --apply-border: #5b9bd5;
+                --apply-bg: rgba(91, 155, 213, 0.15);
+                --apply-bg-hover: rgba(91, 155, 213, 0.28);
+                --apply-fg: #8bbce6;
+                --selection-bg: rgba(124, 156, 250, 0.45);
             }
             * {
                 margin: 0;
@@ -63,7 +77,11 @@
                 left: 0;
                 right: 0;
                 height: 36px;
-                background: linear-gradient(180deg, #1e2029 0%, #191b23 100%);
+                background: linear-gradient(
+                    180deg,
+                    var(--chrome-top) 0%,
+                    var(--chrome-bottom) 100%
+                );
                 border-bottom: 1px solid var(--border);
                 display: flex;
                 align-items: stretch;
@@ -208,7 +226,7 @@
                 content: "";
                 position: absolute;
                 inset: 0;
-                background: rgba(21, 23, 30, 0.55);
+                background: var(--pane-dim);
                 pointer-events: none;
                 z-index: 50;
             }
@@ -269,7 +287,7 @@
             }
             .output::selection,
             .output *::selection {
-                background: rgba(124, 156, 250, 0.45);
+                background: var(--selection-bg);
                 color: inherit;
             }
             .line {
@@ -310,7 +328,7 @@
             #settings-modal {
                 position: fixed;
                 inset: 0;
-                background: rgba(8, 10, 14, 0.66);
+                background: var(--modal-overlay);
                 display: grid;
                 place-items: center;
                 z-index: 200;
@@ -329,7 +347,11 @@
             }
             .settings-panel {
                 width: min(460px, calc(100vw - 32px));
-                background: linear-gradient(180deg, #1d2029 0%, #15171e 100%);
+                background: linear-gradient(
+                    180deg,
+                    var(--panel-top) 0%,
+                    var(--panel-bottom) 100%
+                );
                 border: 1px solid var(--border);
                 border-radius: 14px;
                 box-shadow: 0 28px 60px rgba(0, 0, 0, 0.45);
@@ -370,7 +392,7 @@
             }
             .settings-close:hover {
                 color: var(--fg);
-                background: rgba(255, 255, 255, 0.08);
+                background: var(--control-hover);
             }
             .settings-copy {
                 color: var(--muted);
@@ -380,6 +402,22 @@
             .settings-group {
                 display: grid;
                 gap: 12px;
+            }
+            .settings-section {
+                display: grid;
+                gap: 10px;
+            }
+            .settings-section + .settings-section {
+                border-top: 1px solid var(--border);
+                padding-top: 14px;
+                margin-top: 2px;
+            }
+            .settings-section-title {
+                color: var(--muted);
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
             }
             .setting-row {
                 display: grid;
@@ -392,7 +430,7 @@
             .setting-row select,
             .setting-row input {
                 width: 100%;
-                background: rgba(255, 255, 255, 0.04);
+                background: var(--control-bg);
                 color: var(--fg);
                 border: 1px solid var(--border);
                 border-radius: 8px;
@@ -424,7 +462,7 @@
                 opacity: 1;
             }
             .settings-preview {
-                background: rgba(0, 0, 0, 0.35);
+                background: var(--preview-bg);
                 border: 1px solid var(--border);
                 border-radius: 8px;
                 padding: 10px 12px;
@@ -438,7 +476,35 @@
                 box-sizing: border-box;
             }
             .settings-preview .muted {
-                color: var(--muted);
+                color: var(--preview-muted, var(--muted));
+            }
+            .theme-sample {
+                background: var(--theme-bg);
+                color: var(--theme-fg);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 10px 12px;
+                font-family: Menlo, "SF Mono", Monaco, monospace;
+                font-size: 12px;
+                line-height: 1.4;
+                display: grid;
+                gap: 8px;
+            }
+            .theme-sample .muted {
+                color: var(--theme-muted);
+            }
+            .theme-sample .accent {
+                color: var(--theme-accent);
+            }
+            .theme-swatches {
+                display: grid;
+                grid-template-columns: repeat(16, minmax(8px, 1fr));
+                gap: 3px;
+            }
+            .theme-swatch {
+                height: 12px;
+                border-radius: 3px;
+                box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
             }
             .settings-foot {
                 display: flex;
@@ -456,26 +522,26 @@
             }
             .settings-reset {
                 border: 1px solid var(--border);
-                background: rgba(255, 255, 255, 0.04);
+                background: var(--control-bg);
                 color: var(--fg);
                 border-radius: 8px;
                 padding: 8px 12px;
                 cursor: pointer;
             }
             .settings-reset:hover {
-                background: rgba(255, 255, 255, 0.08);
+                background: var(--control-hover);
             }
             .settings-apply {
-                border: 1px solid #5b9bd5;
-                background: rgba(91, 155, 213, 0.15);
-                color: #8bbce6;
+                border: 1px solid var(--apply-border);
+                background: var(--apply-bg);
+                color: var(--apply-fg);
                 border-radius: 8px;
                 padding: 8px 16px;
                 cursor: pointer;
                 font-weight: 500;
             }
             .settings-apply:hover {
-                background: rgba(91, 155, 213, 0.28);
+                background: var(--apply-bg-hover);
             }
             .settings-apply:disabled {
                 opacity: 0.35;
@@ -503,40 +569,54 @@
                 <p class="settings-copy">
                     Adjust how terminal text is displayed. Changes apply to all tabs and panes.
                 </p>
-                <div class="settings-preview" id="settings-preview"><span class="muted">$</span> echo <span class="muted">"</span>မင်္ဂလာပါ<span class="muted">"</span>
-<span class="muted">$</span> မြန်မာစာ <span class="muted">│</span> hello world</div>
                 <div class="settings-group">
-                    <div class="setting-row">
-                        <label for="settings-view-mode">View mode</label>
-                        <select id="settings-view-mode">
-                            <option value="compact">Compact</option>
-                            <option value="default">Default</option>
-                            <option value="presentation">Presentation</option>
-                        </select>
-                    </div>
-                    <div class="setting-row">
-                        <label for="settings-font-size">Font size</label>
-                        <div class="setting-inline">
-                            <input id="settings-font-size" type="range" min="11" max="24" step="1" />
-                            <input id="settings-font-size-value" type="number" min="11" max="24" step="1" />
+                    <div class="settings-section">
+                        <div class="settings-section-title">Theme</div>
+                        <div class="setting-row">
+                            <label for="settings-theme">Color theme</label>
+                            <select id="settings-theme"></select>
+                        </div>
+                        <div class="theme-sample" id="settings-theme-sample">
+                            <div><span class="muted">$</span> ls <span class="accent">src/renderer</span></div>
+                            <div class="theme-swatches" id="settings-theme-swatches"></div>
                         </div>
                     </div>
-                    <div class="setting-row">
-                        <label for="settings-font-family">Font family</label>
-                        <select id="settings-font-family"></select>
-                        <div class="setting-note" id="settings-font-family-note">
-                            Installed monospace fonts detected on this machine appear here.
+                    <div class="settings-section">
+                        <div class="settings-section-title">Text</div>
+                        <div class="settings-preview" id="settings-preview"><span class="muted">$</span> echo <span class="muted">"</span>မင်္ဂလာပါ<span class="muted">"</span>
+<span class="muted">$</span> မြန်မာစာ <span class="muted">│</span> hello world</div>
+                        <div class="setting-row">
+                            <label for="settings-view-mode">View mode</label>
+                            <select id="settings-view-mode">
+                                <option value="compact">Compact</option>
+                                <option value="default">Default</option>
+                                <option value="presentation">Presentation</option>
+                            </select>
                         </div>
-                    </div>
-                    <div class="setting-row settings-custom-font-row" id="settings-custom-font-row" hidden>
-                        <label for="settings-custom-font">Custom local font name</label>
-                        <input
-                            id="settings-custom-font"
-                            type="text"
-                            placeholder='Example: "JetBrains Mono"'
-                        />
-                        <div class="setting-note">
-                            Enter any installed font family name. Myanmar fallbacks stay enabled automatically.
+                        <div class="setting-row">
+                            <label for="settings-font-size">Font size</label>
+                            <div class="setting-inline">
+                                <input id="settings-font-size" type="range" min="11" max="24" step="1" />
+                                <input id="settings-font-size-value" type="number" min="11" max="24" step="1" />
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <label for="settings-font-family">Font family</label>
+                            <select id="settings-font-family"></select>
+                            <div class="setting-note" id="settings-font-family-note">
+                                Installed monospace fonts detected on this machine appear here.
+                            </div>
+                        </div>
+                        <div class="setting-row settings-custom-font-row" id="settings-custom-font-row" hidden>
+                            <label for="settings-custom-font">Custom local font name</label>
+                            <input
+                                id="settings-custom-font"
+                                type="text"
+                                placeholder='Example: "JetBrains Mono"'
+                            />
+                            <div class="setting-note">
+                                Enter any installed font family name. Myanmar fallbacks stay enabled automatically.
+                            </div>
                         </div>
                     </div>
                 </div>

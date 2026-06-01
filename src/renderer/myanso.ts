@@ -1,13 +1,17 @@
 import { Terminal, IUnicodeVersionProvider } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
 import {
+  ansi256Palette,
+  applyThemeVariables,
   buildTerminalFontFamily,
   loadAppearance,
   normalizeAppearance,
   saveAppearance,
+  themeById,
   VIEW_MODE_LINE_HEIGHT,
+  xtermTheme,
   type AppearancePrefs,
 } from "./appearance";
 import { initSettingsPanel } from "./settings-panel";
@@ -34,49 +38,15 @@ tabbar.addEventListener(
 );
 
 // ---- Shared (pure) helpers -------------------------------------------
-const ANSI_COLORS = [
-  "#000000",
-  "#ff6e6e",
-  "#6eff6e",
-  "#ffff6e",
-  "#7c9cfa",
-  "#ff6eff",
-  "#6effff",
-  "#e4e4e4",
-  "#686868",
-  "#ff8b8b",
-  "#8bff8b",
-  "#ffff8b",
-  "#9cb0fa",
-  "#ff8bff",
-  "#8bffff",
-  "#ffffff",
-];
-
-function get256(code: number): string {
-  if (code < 16) return ANSI_COLORS[code];
-  if (code >= 232) {
-    const v = (code - 232) * 10 + 8;
-    return `rgb(${v},${v},${v})`;
-  }
-  const c = code - 16;
-  const r = Math.floor(c / 36);
-  const g = Math.floor((c % 36) / 6);
-  const b = c % 6;
-  const m = (x: number) => (x === 0 ? 0 : x * 40 + 55);
-  return `rgb(${m(r)},${m(g)},${m(b)})`;
-}
-
-const ANSI_256_COLORS = Array.from({ length: 256 }, (_, i) => get256(i));
-
 const MODE_ANSI16 = 16777216;
 const MODE_256 = 33554432;
 const MODE_RGB = 50331648;
 
 function cssColor(color: number, mode: number): string | null {
   if (mode === 0) return null;
-  if (mode === MODE_ANSI16) return ANSI_COLORS[color];
-  if (mode === MODE_256) return ANSI_256_COLORS[color];
+  if (mode === MODE_ANSI16 || mode === MODE_256) {
+    return activeAnsiColors[color] ?? null;
+  }
   if (mode === MODE_RGB) {
     const r = (color >> 16) & 255;
     const g = (color >> 8) & 255;
@@ -153,6 +123,15 @@ function applyMyanmarWidth(
 }
 
 let appearance = loadAppearance();
+let activeTheme = themeById(appearance.theme);
+let activeAnsiColors = ansi256Palette(activeTheme);
+applyThemeVariables(activeTheme);
+
+function applyGlobalTheme(themeId: string): void {
+  activeTheme = themeById(themeId);
+  activeAnsiColors = ansi256Palette(activeTheme);
+  applyThemeVariables(activeTheme);
+}
 
 const home = window.pty?.homeDir || "";
 function prettyPath(raw: string): string {
@@ -259,7 +238,7 @@ class PaneSession {
       cursorBlink: false,
       scrollback: 5000,
       allowProposedApi: true,
-      theme: { background: "#15171e", foreground: "#e4e4e4" },
+      theme: xtermTheme(activeTheme),
     });
     this.fit = new FitAddon();
     this.term.loadAddon(this.fit);
@@ -271,7 +250,6 @@ class PaneSession {
     applyMyanmarWidth(this.term, {
       collapseSpacingMarks: window.pty?.platform !== "linux",
     });
-    this.term.loadAddon(new WebLinksAddon());
 
     this.term.attachCustomKeyEventHandler((e) => this.opts.onKey(e, this));
 
@@ -320,6 +298,28 @@ class PaneSession {
   // and the textarea isn't created until after open().
   attach(): void {
     this.term.open(this.hiddenDiv);
+
+    // The hidden term renders only to drive parsing, cursor tracking, and
+    // FitAddon's cell measurement — nobody sees it (.hidden-terminal is
+    // opacity:0). The default DOM renderer would build a full span tree per
+    // row, duplicating the .output mirror we paint ourselves. WebGL collapses
+    // that to a single GPU canvas, so the brain costs one texture instead of
+    // a second DOM render every frame. On context loss xterm auto-falls back
+    // to the DOM renderer; dispose the addon so it doesn't keep retrying.
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      this.term.loadAddon(webgl);
+      this.disposers.push(() => {
+        try {
+          webgl.dispose();
+        } catch {
+          /* */
+        }
+      });
+    } catch (e) {
+      console.warn("[myanso] webgl renderer unavailable, using DOM", e);
+    }
 
     const onFocus = () => {
       this.focused = true;
@@ -445,15 +445,17 @@ class PaneSession {
 
   applyAppearance(prefs: AppearancePrefs): void {
     const fontFamily = buildTerminalFontFamily(prefs.fontFamily);
+    const theme = themeById(prefs.theme);
     this.leafEl.style.fontFamily = fontFamily;
     this.leafEl.style.fontSize = `${prefs.fontSize}px`;
     this.term.options.fontFamily = fontFamily;
     this.term.options.fontSize = prefs.fontSize;
     this.term.options.lineHeight = VIEW_MODE_LINE_HEIGHT[prefs.viewMode];
+    this.term.options.theme = { ...xtermTheme(theme) };
     if (!this.active) return;
     requestAnimationFrame(() => {
       this.fitAndResize();
-      this.scheduleRender();
+      this.scheduleRender(undefined, undefined, true);
     });
   }
 
@@ -1549,6 +1551,7 @@ const settingsPanel = initSettingsPanel({
   focusFallback: newTabBtn,
   onChange: (prefs) => {
     appearance = normalizeAppearance(prefs);
+    applyGlobalTheme(appearance.theme);
     saveAppearance(appearance);
     tabs.applyAppearance(appearance);
   },

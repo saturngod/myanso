@@ -10,6 +10,8 @@ import { delimiter, join } from "node:path";
 function defaultShell(): string {
   if (process.platform === "win32") return windowsShell();
   if (process.platform === "darwin") return "/bin/zsh";
+  const loginShell = os.userInfo().shell;
+  if (loginShell) return loginShell;
   return "/bin/bash";
 }
 
@@ -56,6 +58,7 @@ function unquotePathEntry(pathEntry: string): string {
 // fish/elvish at SHELL=/usr/local/bin/fish still gets honored.
 function resolveShell(): string {
   if (process.platform === "win32") return defaultShell();
+  if (process.platform === "darwin") return os.userInfo().shell || defaultShell();
 
   const s = process.env.SHELL;
   if (s && !/\/sh$/.test(s)) return s;
@@ -113,6 +116,11 @@ function schedule(id: string, s: Session): void {
 function createSession(wc: WebContents, cwd?: string): string {
   const id = String(nextId++);
   const env: NodeJS.ProcessEnv = { ...process.env };
+  const user = os.userInfo();
+  env.HOME = os.homedir();
+  env.USER = env.USER || user.username;
+  env.LOGNAME = env.LOGNAME || user.username;
+  env.SHELL = USER_SHELL;
   env.TERM = "xterm-256color";
   env.COLORTERM = "truecolor";
   const args =
