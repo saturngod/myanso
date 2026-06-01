@@ -56,6 +56,35 @@ function cssColor(color: number, mode: number): string | null {
   return null;
 }
 
+function dimColor(fg: string | null): string {
+  const base = fg ?? activeTheme.foreground;
+  const hex = base.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const raw = hex[1];
+    const full =
+      raw.length === 3
+        ? raw
+            .split("")
+            .map((ch) => ch + ch)
+            .join("")
+        : raw;
+    const value = Number.parseInt(full, 16);
+    const r = (value >> 16) & 255;
+    const g = (value >> 8) & 255;
+    const b = value & 255;
+    return `rgba(${r},${g},${b},0.5)`;
+  }
+
+  const rgb = base.match(
+    /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i,
+  );
+  if (rgb) {
+    return `rgba(${rgb[1]},${rgb[2]},${rgb[3]},0.5)`;
+  }
+
+  return `color-mix(in srgb, ${base} 50%, transparent)`;
+}
+
 const NEEDS_ESCAPE = /[&<>"]/;
 function escapeHtml(s: string): string {
   if (!NEEDS_ESCAPE.test(s)) return s;
@@ -72,15 +101,18 @@ function wrapRun(
   bg: string | null,
   bold: boolean,
   italic: boolean,
+  dim: boolean,
 ): string {
   if (!text) return "";
-  if (!fg && !bg && !bold && !italic) return escapeHtml(text);
+  if (!fg && !bg && !bold && !italic && !dim) return escapeHtml(text);
   const parts: string[] = [];
-  if (fg) parts.push(`color:${fg}`);
+  if (dim) parts.push(`color:${dimColor(fg)}`);
+  else if (fg) parts.push(`color:${fg}`);
   if (bg) parts.push(`background:${bg}`);
   if (bold) parts.push("font-weight:bold");
   if (italic) parts.push("font-style:italic");
-  return `<span style="${parts.join(";")}">${escapeHtml(text)}</span>`;
+  const classAttr = bg ? ' class="bg-run"' : "";
+  return `<span${classAttr} style="${parts.join(";")}">${escapeHtml(text)}</span>`;
 }
 
 const isMyanmarMc = (cp: number): boolean =>
@@ -685,7 +717,8 @@ class PaneSession {
             c.getFgColorMode() !== 0 ||
             c.getBgColorMode() !== 0 ||
             c.isBold() !== 0 ||
-            c.isItalic() !== 0
+            c.isItalic() !== 0 ||
+            c.isDim() !== 0
           ) {
             plain = false;
             break;
@@ -710,9 +743,10 @@ class PaneSession {
       let curBg: string | null = null;
       let curBold = false;
       let curItalic = false;
+      let curDim = false;
       const flush = () => {
         if (run) {
-          html += wrapRun(run, curFg, curBg, curBold, curItalic);
+          html += wrapRun(run, curFg, curBg, curBold, curItalic, curDim);
           run = "";
         }
       };
@@ -731,6 +765,7 @@ class PaneSession {
           curBg = null;
           curBold = false;
           curItalic = false;
+          curDim = false;
           continue;
         }
 
@@ -738,18 +773,21 @@ class PaneSession {
         const bg = this.cellColor(c.getBgColor(), c.getBgColorMode());
         const bold = c.isBold() !== 0;
         const italic = c.isItalic() !== 0;
+        const dim = c.isDim() !== 0;
 
         if (
           fg !== curFg ||
           bg !== curBg ||
           bold !== curBold ||
-          italic !== curItalic
+          italic !== curItalic ||
+          dim !== curDim
         ) {
           flush();
           curFg = fg;
           curBg = bg;
           curBold = bold;
           curItalic = italic;
+          curDim = dim;
         }
 
         if (c.getWidth() === 0) {

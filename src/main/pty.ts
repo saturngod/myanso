@@ -1,5 +1,6 @@
 import { ipcMain, WebContents } from "electron";
 import { spawn as spawnPty, IPty } from "node-pty";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import { delimiter, join } from "node:path";
@@ -51,6 +52,27 @@ function unquotePathEntry(pathEntry: string): string {
   return pathEntry.replace(/^"(.+)"$/, "$1");
 }
 
+function macLoginShellForUser(username: string): string | null {
+  const result = spawnSync(
+    "/usr/bin/dscl",
+    [".", "-read", `/Users/${username}`, "UserShell"],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) return null;
+  const match = result.stdout.match(/^UserShell:\s*(\S+)/m);
+  const shell = match?.[1];
+  return shell && existsSync(shell) ? shell : null;
+}
+
+function sudoLoginShell(): string | null {
+  const sudoUser = process.env.SUDO_USER;
+  if (!sudoUser || sudoUser === "root") return null;
+  if (process.platform === "darwin") {
+    return macLoginShellForUser(sudoUser) ?? defaultShell();
+  }
+  return null;
+}
+
 // `npm run` clobbers SHELL with its non-interactive script-shell (default
 // /bin/sh), so during `npm run dev` we'd otherwise launch /bin/sh — bash
 // in disguise on macOS — instead of the user's login shell. Treat any
@@ -58,6 +80,8 @@ function unquotePathEntry(pathEntry: string): string {
 // fish/elvish at SHELL=/usr/local/bin/fish still gets honored.
 function resolveShell(): string {
   if (process.platform === "win32") return defaultShell();
+  const sudoShell = sudoLoginShell();
+  if (sudoShell) return sudoShell;
   if (process.platform === "darwin") return os.userInfo().shell || defaultShell();
 
   const s = process.env.SHELL;
