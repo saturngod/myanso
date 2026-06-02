@@ -65,8 +65,8 @@
                 font-family:
                     Menlo, "SF Mono", Monaco, Consolas, "Cascadia Mono",
                     "DejaVu Sans Mono", "Liberation Mono", "Ubuntu Mono",
-                    "Noto Sans Mono", "Noto Sans Myanmar",
-                    "Myanmar Sangam MN", "Myanmar MN", monospace;
+                    "Noto Sans Mono", "Noto Sans Myanmar", "Myanmar Sangam MN",
+                    "Myanmar MN", monospace;
                 font-size: 14px;
                 line-height: 1.35;
             }
@@ -258,8 +258,8 @@
             .tab-root {
                 position: absolute;
                 top: 4px;
-                left: 2px;
-                right: 2px;
+                left: 0px;
+                right: 0px;
                 bottom: 4px;
                 display: flex;
             }
@@ -354,7 +354,7 @@
                 cursor: text;
                 user-select: text;
                 /* Keep in sync with .hidden-terminal padding. */
-                padding: 4px 8px;
+                padding: 2px 8px;
             }
             .output::selection,
             .output *::selection {
@@ -437,12 +437,20 @@
                 animation: settings-fade-out 0.15s ease forwards;
             }
             @keyframes settings-fade-in {
-                from { opacity: 0; }
-                to { opacity: 1; }
+                from {
+                    opacity: 0;
+                }
+                to {
+                    opacity: 1;
+                }
             }
             @keyframes settings-fade-out {
-                from { opacity: 1; }
-                to { opacity: 0; }
+                from {
+                    opacity: 1;
+                }
+                to {
+                    opacity: 0;
+                }
             }
             .settings-panel {
                 /* Keep every control clickable even where the centered panel
@@ -464,12 +472,24 @@
                 animation: settings-panel-out 0.15s ease forwards;
             }
             @keyframes settings-panel-in {
-                from { opacity: 0; transform: scale(0.96) translateY(8px); }
-                to { opacity: 1; transform: scale(1) translateY(0); }
+                from {
+                    opacity: 0;
+                    transform: scale(0.96) translateY(8px);
+                }
+                to {
+                    opacity: 1;
+                    transform: scale(1) translateY(0);
+                }
             }
             @keyframes settings-panel-out {
-                from { opacity: 1; transform: scale(1) translateY(0); }
-                to { opacity: 0; transform: scale(0.96) translateY(8px); }
+                from {
+                    opacity: 1;
+                    transform: scale(1) translateY(0);
+                }
+                to {
+                    opacity: 0;
+                    transform: scale(0.96) translateY(8px);
+                }
             }
             .settings-head {
                 display: flex;
@@ -479,8 +499,11 @@
             }
             .settings-head h2 {
                 font:
-                    600 16px/1.2 -apple-system, BlinkMacSystemFont,
-                    "SF Pro Text", system-ui, sans-serif;
+                    600 16px/1.2 -apple-system,
+                    BlinkMacSystemFont,
+                    "SF Pro Text",
+                    system-ui,
+                    sans-serif;
             }
             .settings-close {
                 border: none;
@@ -552,7 +575,10 @@
             }
             .settings-custom-font-row {
                 overflow: hidden;
-                transition: max-height 0.2s ease, opacity 0.2s ease, margin 0.2s ease;
+                transition:
+                    max-height 0.2s ease,
+                    opacity 0.2s ease,
+                    margin 0.2s ease;
             }
             .settings-custom-font-row[hidden] {
                 max-height: 0;
@@ -666,10 +692,17 @@
             >
                 <div class="settings-head">
                     <h2 id="settings-title">Settings</h2>
-                    <button class="settings-close" id="settings-close" aria-label="Close settings">×</button>
+                    <button
+                        class="settings-close"
+                        id="settings-close"
+                        aria-label="Close settings"
+                    >
+                        ×
+                    </button>
                 </div>
                 <p class="settings-copy">
-                    Adjust how terminal text is displayed. Changes apply to all tabs and panes.
+                    Adjust how terminal text is displayed. Changes apply to all
+                    tabs and panes.
                 </p>
                 <div class="settings-group">
                     <div class="settings-section">
@@ -679,54 +712,104 @@
                             <select id="settings-theme"></select>
                         </div>
                         <div class="theme-sample" id="settings-theme-sample">
-                            <div><span class="muted">$</span> ls <span class="accent">src/renderer</span></div>
-                            <div class="theme-swatches" id="settings-theme-swatches"></div>
+                            <div>
+                                <span class="muted">$</span> ls
+                                <span class="accent">src/renderer</span>
+                            </div>
+                            <div
+                                class="theme-swatches"
+                                id="settings-theme-swatches"
+                            ></div>
                         </div>
                     </div>
                     <div class="settings-section">
                         <div class="settings-section-title">Text</div>
-                        <div class="settings-preview" id="settings-preview"><span class="muted">$</span> echo <span class="muted">"</span>မင်္ဂလာပါ<span class="muted">"</span>
-<span class="muted">$</span> မြန်မာစာ <span class="muted">│</span> hello world</div>
+                        <div class="settings-preview" id="settings-preview">
+                            <span class="muted">$</span> echo
+                            <span class="muted">"</span>မင်္ဂလာပါ<span
+                                class="muted"
+                                >"</span
+                            >
+                            <span class="muted">$</span> မြန်မာစာ
+                            <span class="muted">│</span> hello world
+                        </div>
                         <div class="setting-row">
                             <label for="settings-view-mode">View mode</label>
                             <select id="settings-view-mode">
                                 <option value="compact">Compact</option>
                                 <option value="default">Default</option>
-                                <option value="presentation">Presentation</option>
+                                <option value="presentation">
+                                    Presentation
+                                </option>
                             </select>
                         </div>
                         <div class="setting-row">
                             <label for="settings-font-size">Font size</label>
                             <div class="setting-inline">
-                                <input id="settings-font-size" type="range" min="11" max="24" step="1" />
-                                <input id="settings-font-size-value" type="number" min="11" max="24" step="1" />
+                                <input
+                                    id="settings-font-size"
+                                    type="range"
+                                    min="11"
+                                    max="24"
+                                    step="1"
+                                />
+                                <input
+                                    id="settings-font-size-value"
+                                    type="number"
+                                    min="11"
+                                    max="24"
+                                    step="1"
+                                />
                             </div>
                         </div>
                         <div class="setting-row">
-                            <label for="settings-font-family">Font family</label>
+                            <label for="settings-font-family"
+                                >Font family</label
+                            >
                             <select id="settings-font-family"></select>
-                            <div class="setting-note" id="settings-font-family-note">
-                                Installed monospace fonts detected on this machine appear here.
+                            <div
+                                class="setting-note"
+                                id="settings-font-family-note"
+                            >
+                                Installed monospace fonts detected on this
+                                machine appear here.
                             </div>
                         </div>
-                        <div class="setting-row settings-custom-font-row" id="settings-custom-font-row" hidden>
-                            <label for="settings-custom-font">Custom local font name</label>
+                        <div
+                            class="setting-row settings-custom-font-row"
+                            id="settings-custom-font-row"
+                            hidden
+                        >
+                            <label for="settings-custom-font"
+                                >Custom local font name</label
+                            >
                             <input
                                 id="settings-custom-font"
                                 type="text"
                                 placeholder='Example: "JetBrains Mono"'
                             />
                             <div class="setting-note">
-                                Enter any installed font family name. Myanmar fallbacks stay enabled automatically.
+                                Enter any installed font family name. Myanmar
+                                fallbacks stay enabled automatically.
                             </div>
                         </div>
                     </div>
                 </div>
                 <div class="settings-foot">
-                    <span class="settings-hint">Stored locally on this machine.</span>
+                    <span class="settings-hint"
+                        >Stored locally on this machine.</span
+                    >
                     <div class="settings-foot-actions">
-                        <button class="settings-reset" id="settings-reset">Reset</button>
-                        <button class="settings-apply" id="settings-apply" disabled>Save &amp; Apply</button>
+                        <button class="settings-reset" id="settings-reset">
+                            Reset
+                        </button>
+                        <button
+                            class="settings-apply"
+                            id="settings-apply"
+                            disabled
+                        >
+                            Save &amp; Apply
+                        </button>
                     </div>
                 </div>
             </div>
