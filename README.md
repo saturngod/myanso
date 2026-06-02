@@ -88,6 +88,25 @@ npm install       # installs deps + auto-rebuilds node-pty native module
 | `npm run dist` | Build distributable (DMG / NSIS / AppImage) |
 | `npm run rebuild` | Manually rebuild node-pty native module |
 
+### Troubleshooting
+
+**`Error: Electron uninstall`** when running `npm run dev`
+
+This means the Electron binary failed to download/extract — usually because
+`~/Library/Caches/electron` (macOS) is owned by `root` from a previous
+`sudo npm install`. Remove the cache and reinstall so it's recreated under
+your user:
+
+```bash
+sudo rm -rf ~/Library/Caches/electron
+node node_modules/electron/install.js   # re-download + extract the binary
+npm run rebuild                          # rebuild node-pty for this Electron
+```
+
+> Never run `npm install` with `sudo` — that's what leaves the cache (and
+> `node_modules/node-pty/build`) owned by `root` and causes this in the first
+> place.
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
