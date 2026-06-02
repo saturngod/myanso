@@ -257,10 +257,10 @@
                .leaf (terminal pane), with .divider between siblings. */
             .tab-root {
                 position: absolute;
-                top: 8px;
-                left: 10px;
-                right: 10px;
-                bottom: 8px;
+                top: 4px;
+                left: 2px;
+                right: 2px;
+                bottom: 4px;
                 display: flex;
             }
             .tab-root.inactive {
@@ -334,7 +334,9 @@
                 z-index: 10;
                 pointer-events: none;
                 /* Keep in sync with .output padding so the brain (FitAddon
-                   measures this element) and the face derive the same grid. */
+                   measures this element) and the face derive the same grid.
+                   Per-pane padding keeps text off the divider and window edges
+                   consistently for every pane (single or split). */
                 padding: 4px 8px;
             }
 
@@ -351,8 +353,7 @@
                 pointer-events: auto;
                 cursor: text;
                 user-select: text;
-                /* Padding gives each pane breathing room from the divider and
-                   window edges. Keep in sync with .hidden-terminal padding. */
+                /* Keep in sync with .hidden-terminal padding. */
                 padding: 4px 8px;
             }
             .output::selection,
