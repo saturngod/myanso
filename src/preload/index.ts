@@ -15,9 +15,14 @@ const api = {
   // webUtils lives in the electron module and is unreachable from the
   // context-isolated renderer, so resolve the dropped File's absolute path
   // here in preload. Replaces the non-standard File.path (removed in
-  // Electron 32). Returns "" for objects that aren't real filesystem files.
+  // Electron 32). Returns "" for objects that aren't real filesystem files
+  // or if resolution throws, so a single bad drop never breaks the batch.
   getPathForFile(file: File): string {
-    return webUtils.getPathForFile(file);
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return "";
+    }
   },
   spawn(cwd?: string): Promise<string | null> {
     return ipcRenderer.invoke("pty:spawn", cwd);
