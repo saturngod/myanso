@@ -66,7 +66,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LINUX_MAINTAINER: ${{ secrets.LINUX_MAINTAINER }}
-        run: npx electron-builder ${{ matrix.platform.args }} -c.linux.maintainer="$LINUX_MAINTAINER" --publish never
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npx electron-builder ${{ matrix.platform.args }} \
+            -c.extraMetadata.version="$VERSION" \
+            -c.linux.maintainer="$LINUX_MAINTAINER" \
+            --publish never
         shell: bash
 
       - name: Upload artifacts
