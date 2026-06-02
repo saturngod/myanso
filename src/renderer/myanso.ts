@@ -1759,8 +1759,25 @@ class TabManager {
   }
 
   // Returns false to swallow the event from xterm.
-  private handleKey(e: KeyboardEvent, _s: PaneSession): boolean {
+  private handleKey(e: KeyboardEvent, s: PaneSession): boolean {
     if (e.type !== "keydown") return true;
+
+    // Shift+Enter: the classic xterm encoding sends a plain CR for both Enter
+    // and Shift+Enter, so apps like Claude Code can't tell them apart and
+    // treat Shift+Enter as submit. Send ESC+CR — the same sequence
+    // `claude /terminal-setup` configures — so it inserts a newline instead.
+    if (
+      e.code === "Enter" &&
+      e.shiftKey &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey
+    ) {
+      e.preventDefault();
+      window.pty?.write(s.ptyId, "\x1b\r");
+      return false;
+    }
+
     // Mac uses Cmd; win/linux use Ctrl. On non-mac we additionally require
     // Shift for D/T/W because raw Ctrl+D (EOF) and Ctrl+W (delete-word)
     // are reserved by readline-driven shells.
@@ -1893,8 +1910,19 @@ class TabManager {
   async copySelection(): Promise<boolean> {
     const text = currentSelectionText();
     if (!text) return false;
+    // Snapshot the selection before we copy: restoring terminal focus below
+    // moves focus to xterm's textarea, which collapses the window selection
+    // in the .output div. Re-apply it so Cmd+C leaves the highlight in place
+    // like a normal terminal.
+    const sel = window.getSelection();
+    const range =
+      sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
     await window.pty?.writeClipboardText(text);
     this.active?.focusActive();
+    if (range && sel) {
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
     return true;
   }
 
