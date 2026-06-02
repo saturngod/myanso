@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import os from "node:os";
 
 type TerminalContextAction =
@@ -12,6 +12,13 @@ type TerminalContextAction =
 const api = {
   homeDir: os.homedir(),
   platform: process.platform,
+  // webUtils lives in the electron module and is unreachable from the
+  // context-isolated renderer, so resolve the dropped File's absolute path
+  // here in preload. Replaces the non-standard File.path (removed in
+  // Electron 32). Returns "" for objects that aren't real filesystem files.
+  getPathForFile(file: File): string {
+    return webUtils.getPathForFile(file);
+  },
   spawn(cwd?: string): Promise<string | null> {
     return ipcRenderer.invoke("pty:spawn", cwd);
   },

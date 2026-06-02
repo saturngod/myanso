@@ -2560,8 +2560,9 @@ newTabBtn.addEventListener("click", () => {
 // path makes images droppable into CLIs that accept file paths
 // (e.g. Claude Code with @/path/to/image.png).
 //
-// Electron 30: File.path is still attached. From Electron 32 it's
-// removed in favor of webUtils.getPathForFile() — switch when we bump.
+// Paths are resolved via webUtils.getPathForFile() (exposed through the
+// preload bridge), not the non-standard File.path — the latter is removed
+// in Electron 32.
 function shellEscapePath(p: string): string {
   // Strip newlines (shell would treat them as Enter).
   const stripped = p.replace(/\r?\n/g, "");
@@ -2603,7 +2604,7 @@ wrapper.addEventListener("drop", (e) => {
   if (!files || files.length === 0) return;
   const paths: string[] = [];
   for (const f of Array.from(files)) {
-    const p = (f as File & { path?: string }).path;
+    const p = window.pty!.getPathForFile(f);
     if (p) paths.push(shellEscapePath(p));
   }
   if (paths.length === 0) return;

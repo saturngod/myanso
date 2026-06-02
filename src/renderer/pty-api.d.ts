@@ -13,6 +13,7 @@ declare global {
     pty: {
       homeDir: string;
       platform: string;
+      getPathForFile(file: File): string;
       spawn(cwd?: string): Promise<string | null>;
       ready(id: string): void;
       write(id: string, data: string): void;
