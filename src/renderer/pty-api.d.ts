@@ -9,7 +9,33 @@ type TerminalContextAction =
   | "split-up";
 
 declare global {
+  // Serialized pane tree handed between windows during tab drag-out.
+  type SerializedNode =
+    | { kind: "leaf"; ptyId: string; cwd: string; title: string; screen: string }
+    | {
+        kind: "branch";
+        dir: "row" | "col";
+        ratio: number;
+        a: SerializedNode;
+        b: SerializedNode;
+      };
+  interface SerializedTab {
+    tree: SerializedNode;
+  }
+  interface HitTestResult {
+    kind: "self" | "other" | "none";
+    wcId?: number;
+    inTabbar?: boolean;
+  }
+
   interface Window {
+    win: {
+      createWithTab(payload: SerializedTab): Promise<boolean>;
+      consumeAdopt(): Promise<SerializedTab | null>;
+      moveTab(payload: SerializedTab, targetWcId: number): Promise<boolean>;
+      hitTest(x: number, y: number): Promise<HitTestResult>;
+      onAdoptTab(cb: (payload: SerializedTab) => void): () => void;
+    };
     pty: {
       homeDir: string;
       platform: string;
