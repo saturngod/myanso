@@ -2,6 +2,7 @@ import { Terminal, IUnicodeVersionProvider } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import {
   ansi256Palette,
   applyThemeVariables,
@@ -544,6 +545,9 @@ class PaneSession {
   readonly outputDiv: HTMLDivElement;
   readonly term: Terminal;
   readonly fit: FitAddon;
+  // Loaded lazily in attach(); lets a tab snapshot its screen + scrollback
+  // for replay when dragged into another window.
+  private serializeAddon: SerializeAddon | null = null;
 
   cwd = "~";
   title = "";
@@ -736,6 +740,15 @@ class PaneSession {
       });
     } catch (e) {
       console.warn("[myanso] webgl renderer unavailable, using DOM", e);
+    }
+
+    // Serialize addon: snapshots the buffer (screen + scrollback) as a string
+    // of escape sequences so a dragged-out tab can repaint in its new window.
+    try {
+      this.serializeAddon = new SerializeAddon();
+      this.term.loadAddon(this.serializeAddon);
+    } catch {
+      this.serializeAddon = null;
     }
 
     const onFocus = () => {
@@ -1206,6 +1219,16 @@ class PaneSession {
   }
 
   // Absolute cwd (un-prettified) for spawning sibling shells.
+  // Snapshot the current screen + scrollback for replay in another window.
+  // Returns "" if the addon is unavailable (caller just gets a blank pane).
+  serializeScreen(): string {
+    try {
+      return this.serializeAddon?.serialize() ?? "";
+    } catch {
+      return "";
+    }
+  }
+
   cwdAbsolute(): string | null {
     if (!this.cwd) return null;
     if (this.cwd === "~") return home || null;
@@ -1635,6 +1658,45 @@ function removeLeaf(leaf: Leaf): { newRoot?: Pane; sibling: Pane } | null {
   return { newRoot: sibling, sibling };
 }
 
+// Rebuild a pane tree from a serialized snapshot (tab drag-out adoption).
+// Mirrors splitLeaf's DOM shape — .split containers with a .divider between
+// children — but constructs the whole tree at once instead of one split at a
+// time. Sessions are produced by makeSession (which binds each to its
+// already-live ptyId), so no PTY is spawned here.
+function buildSerializedTree(
+  node: SerializedNode,
+  makeSession: (leaf: Extract<SerializedNode, { kind: "leaf" }>) => PaneSession,
+  onDividerDown: (b: Branch, e: PointerEvent) => void,
+): Pane {
+  if (node.kind === "leaf") {
+    return { kind: "leaf", session: makeSession(node), parent: null };
+  }
+  const a = buildSerializedTree(node.a, makeSession, onDividerDown);
+  const b = buildSerializedTree(node.b, makeSession, onDividerDown);
+  const el = document.createElement("div");
+  el.className = `split dir-${node.dir}`;
+  const divider = document.createElement("div");
+  divider.className = `divider dir-${node.dir}`;
+  el.appendChild(paneEl(a));
+  el.appendChild(divider);
+  el.appendChild(paneEl(b));
+  const branch: Branch = {
+    kind: "branch",
+    dir: node.dir,
+    ratio: node.ratio,
+    a,
+    b,
+    el,
+    divider,
+    parent: null,
+  };
+  a.parent = branch;
+  b.parent = branch;
+  divider.addEventListener("pointerdown", (e) => onDividerDown(branch, e));
+  applyBranchSizing(branch);
+  return branch;
+}
+
 // Geometric pane navigation: pick the leaf nearest in the requested
 // direction from the current one, by leaf-rect centers.
 function findNeighbor(
@@ -1686,10 +1748,13 @@ class Tab {
   readonly rootEl: HTMLDivElement;
   root: Pane;
   active: Leaf;
+  // Set by TabManager's tab-drag handler so the trailing click event (fired
+  // after a drag's pointerup) doesn't also activate/close the tab.
+  justDragged = false;
   private isActive = false;
 
   constructor(
-    initial: PaneSession,
+    init: PaneSession | Pane,
     private readonly opts: TabOpts,
     private readonly onSessionKey: (
       e: KeyboardEvent,
@@ -1700,10 +1765,17 @@ class Tab {
     this.rootEl.className = "tab-root inactive";
     wrapper.appendChild(this.rootEl);
 
-    const leaf: Leaf = { kind: "leaf", session: initial, parent: null };
-    this.root = leaf;
-    this.active = leaf;
-    this.rootEl.appendChild(initial.leafEl);
+    if ("kind" in init) {
+      // A prebuilt pane tree adopted from another window's dragged tab.
+      this.root = init;
+      this.active = paneLeaves(init)[0];
+      this.rootEl.appendChild(paneEl(init));
+    } else {
+      const leaf: Leaf = { kind: "leaf", session: init, parent: null };
+      this.root = leaf;
+      this.active = leaf;
+      this.rootEl.appendChild(init.leafEl);
+    }
 
     this.tabEl = document.createElement("button");
     this.tabEl.className = "tab";
@@ -1720,6 +1792,11 @@ class Tab {
     this.tabEl.append(this.titleEl, closeEl);
     tabbar.appendChild(this.tabEl);
     this.tabEl.addEventListener("click", (e) => {
+      // Swallow the click that trails a drag gesture's pointerup.
+      if (this.justDragged) {
+        this.justDragged = false;
+        return;
+      }
       if (e.target === closeEl) {
         e.stopPropagation();
         opts.onClose(this);
@@ -1727,6 +1804,31 @@ class Tab {
       }
       opts.onActivateRequest(this);
     });
+  }
+
+  // Snapshot the pane tree for transfer to another window. Captures the live
+  // ptyId of each leaf plus its cwd/title so the destination rebuilds the
+  // same layout and labels without re-spawning shells.
+  serialize(): SerializedTab {
+    const walk = (p: Pane): SerializedNode => {
+      if (p.kind === "leaf") {
+        return {
+          kind: "leaf",
+          ptyId: p.session.ptyId,
+          cwd: p.session.cwd,
+          title: p.session.title,
+          screen: p.session.serializeScreen(),
+        };
+      }
+      return {
+        kind: "branch",
+        dir: p.dir,
+        ratio: p.ratio,
+        a: walk(p.a),
+        b: walk(p.b),
+      };
+    };
+    return { tree: walk(this.root) };
   }
 
   // Used by TabManager when wiring a freshly-created PaneSession.
@@ -1861,7 +1963,8 @@ class Tab {
   }
 
   // ---- Drag-resize -----------------------------------------------------
-  private beginDividerDrag(branch: Branch, e: PointerEvent): void {
+  // Public so adopted (rebuilt) pane trees can wire their dividers back to it.
+  beginDividerDrag(branch: Branch, e: PointerEvent): void {
     if (e.button !== 0) return;
     e.preventDefault();
     const rect = branch.el.getBoundingClientRect();
@@ -2190,9 +2293,202 @@ class TabManager {
     this.tabs.set(ptyId, tab);
     this.order.push(ptyId);
     this.registerLeaf(tab, tab.active);
+    this.setupTabDrag(tab);
     pty.ready(ptyId);
     this.activate(tab);
     return tab;
+  }
+
+  // Rebuild a tab dragged in from another window. Its PTYs are already live
+  // and were re-pointed to this window by main; attach fresh xterms to them
+  // (no spawn) and release buffered output with pty.ready.
+  adoptSerializedTab(payload: SerializedTab): void {
+    const pty = window.pty;
+    if (!pty) return;
+    const ptyIds: string[] = [];
+    const screens = new Map<string, string>();
+    const makeSession = (
+      sl: Extract<SerializedNode, { kind: "leaf" }>,
+    ): PaneSession => {
+      ptyIds.push(sl.ptyId);
+      if (sl.screen) screens.set(sl.ptyId, sl.screen);
+      const session = new PaneSession({
+        ptyId: sl.ptyId,
+        onCwd: () => {},
+        onTitle: () => {},
+        onFocus: () => {},
+        onKey: () => true,
+      });
+      session.cwd = sl.cwd || "~";
+      session.title = sl.title || "";
+      session.term.onData((data) => pty.write(sl.ptyId, data));
+      return session;
+    };
+    // Dividers in the rebuilt tree bind to the tab, which doesn't exist until
+    // after the tree is built; resolve it lazily through this holder.
+    const holder: { tab: Tab | null } = { tab: null };
+    const root = buildSerializedTree(payload.tree, makeSession, (b, e) =>
+      holder.tab?.beginDividerDrag(b, e),
+    );
+    const tab = new Tab(
+      root,
+      {
+        onClose: (t) => this.closeTab(t),
+        onActivateRequest: (t) => this.activate(t),
+        onLeafEmpty: (t) => this.closeTab(t),
+        onLeafClosed: (_t, leaf) => this.unregisterLeaf(leaf),
+        onTitleChange: (t) => {
+          if (t === this.active) document.title = t.displayName();
+        },
+      },
+      (e, s) => this.handleKey(e, s),
+    );
+    holder.tab = tab;
+
+    const id = tab.active.session.ptyId;
+    for (const leaf of paneLeaves(tab.root)) {
+      rewireSessionOpts(leaf.session, tab.buildSessionOpts(leaf.session.ptyId));
+      leaf.session.attach();
+      // Repaint the screen + scrollback captured at drag time, before any
+      // live output flushes, so the pane looks continuous (a fresh xterm
+      // would otherwise show nothing until the next prompt redraw).
+      const screen = screens.get(leaf.session.ptyId);
+      if (screen) leaf.session.writeToTerm(screen);
+      this.registerLeaf(tab, leaf);
+    }
+    this.tabs.set(id, tab);
+    this.order.push(id);
+    this.setupTabDrag(tab);
+    this.activate(tab);
+    // ready flushes the output buffered in main since the transfer.
+    for (const pid of ptyIds) pty.ready(pid);
+  }
+
+  // ---- Tab drag (reorder / tear-off to a window) -----------------------
+  private setupTabDrag(tab: Tab): void {
+    const el = tab.tabEl;
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      // Let the close button get its own click.
+      if ((e.target as HTMLElement).classList.contains("tab-close")) return;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const pointerId = e.pointerId;
+      let dragging = false;
+      const onMove = (ev: PointerEvent) => {
+        if (!dragging) {
+          // A few px of slop so a normal click never reads as a drag.
+          if (
+            Math.abs(ev.clientX - startX) < 6 &&
+            Math.abs(ev.clientY - startY) < 6
+          )
+            return;
+          dragging = true;
+          this.activate(tab);
+          el.classList.add("dragging");
+          try {
+            el.setPointerCapture(pointerId);
+          } catch {
+            /* */
+          }
+        }
+        this.dragReorder(tab, ev.clientX, ev.clientY);
+      };
+      const onUp = (ev: PointerEvent) => {
+        el.removeEventListener("pointermove", onMove);
+        el.removeEventListener("pointerup", onUp);
+        el.removeEventListener("pointercancel", onUp);
+        try {
+          el.releasePointerCapture(pointerId);
+        } catch {
+          /* */
+        }
+        if (!dragging) return;
+        el.classList.remove("dragging");
+        tab.justDragged = true;
+        void this.finishTabDrag(tab, ev);
+      };
+      el.addEventListener("pointermove", onMove);
+      el.addEventListener("pointerup", onUp);
+      el.addEventListener("pointercancel", onUp);
+    });
+  }
+
+  // Live-reorder the dragged tab among its siblings while the pointer is over
+  // the tab strip. Once the pointer leaves the strip the tab stays put (it's
+  // headed for a new/other window).
+  private dragReorder(tab: Tab, clientX: number, clientY: number): void {
+    const bar = tabbar.getBoundingClientRect();
+    if (clientY < bar.top - 24 || clientY > bar.bottom + 24) return;
+    const el = tab.tabEl;
+    const others = Array.from(
+      tabbar.querySelectorAll<HTMLElement>(".tab"),
+    ).filter((s) => s !== el);
+    let before: HTMLElement | null = null;
+    for (const s of others) {
+      const r = s.getBoundingClientRect();
+      if (clientX < r.left + r.width / 2) {
+        before = s;
+        break;
+      }
+    }
+    if (before) {
+      if (el.nextElementSibling !== before) tabbar.insertBefore(el, before);
+    } else if (tabbar.lastElementChild !== el) {
+      tabbar.appendChild(el);
+    }
+  }
+
+  // Decide what a finished tab drag means by where it was dropped.
+  private async finishTabDrag(tab: Tab, ev: PointerEvent): Promise<void> {
+    const bar = tabbar.getBoundingClientRect();
+    const inOwnBar =
+      ev.clientX >= bar.left &&
+      ev.clientX <= bar.right &&
+      ev.clientY >= bar.top &&
+      ev.clientY <= bar.bottom;
+    if (inOwnBar) {
+      // Reordered within this window — commit the live DOM order.
+      this.syncOrderFromDom();
+      return;
+    }
+    const win = window.win;
+    if (!win) {
+      this.syncOrderFromDom();
+      return;
+    }
+    const hit = await win.hitTest(ev.screenX, ev.screenY);
+    if (hit.kind === "other" && hit.inTabbar && hit.wcId != null) {
+      const ok = await win.moveTab(tab.serialize(), hit.wcId);
+      if (ok) this.removeTab(tab, false);
+      else this.syncOrderFromDom();
+      return;
+    }
+    if (hit.kind === "none") {
+      // Dropped outside every window — tear off into a new one.
+      const ok = await win.createWithTab(tab.serialize());
+      if (ok) this.removeTab(tab, false);
+      else this.syncOrderFromDom();
+      return;
+    }
+    // Over a window body (not its tab bar): snap back.
+    this.syncOrderFromDom();
+  }
+
+  // Re-derive this.order from the tab strip's DOM order after a reorder.
+  private syncOrderFromDom(): void {
+    const ids: string[] = [];
+    for (const el of Array.from(
+      tabbar.querySelectorAll<HTMLElement>(".tab"),
+    )) {
+      for (const [id, t] of this.tabs) {
+        if (t.tabEl === el) {
+          ids.push(id);
+          break;
+        }
+      }
+    }
+    if (ids.length === this.order.length) this.order = ids;
   }
 
   async splitActive(
@@ -2237,12 +2533,20 @@ class TabManager {
   }
 
   closeTab(tab: Tab): void {
+    this.removeTab(tab, true);
+  }
+
+  // Remove a tab from this window. With kill=true the PTYs are terminated
+  // (normal close); with kill=false they're left running because they've
+  // already been handed to another window by a tab drag-out.
+  private removeTab(tab: Tab, kill: boolean): void {
     const id = this.tabIdOf(tab);
     if (!id) return;
     const wasActive = this.activeId === id;
-    // Kill all PTYs in this tab.
-    for (const leaf of paneLeaves(tab.root)) {
-      window.pty?.kill(leaf.session.ptyId);
+    if (kill) {
+      for (const leaf of paneLeaves(tab.root)) {
+        window.pty?.kill(leaf.session.ptyId);
+      }
     }
     this.unregisterTab(tab);
     tab.dispose();
@@ -2542,10 +2846,17 @@ if (!window.pty) {
   window.pty.onOpenCwd((cwd) => {
     void tabs.createTab(cwd);
   });
-  // Cold-launch dock drop: main queued the path before the renderer was
-  // ready; consume it here so the first tab opens in that folder instead
-  // of $HOME.
+  // A tab dragged onto this window's tab bar from another window.
+  window.win?.onAdoptTab((payload) => tabs.adoptSerializedTab(payload));
+  // Boot: if this window was spawned to adopt a dragged-out tab, rebuild it
+  // instead of opening a default shell. Otherwise consume any cold-launch
+  // dock-drop path so the first tab opens in that folder instead of $HOME.
   void (async () => {
+    const adopt = await window.win?.consumeAdopt();
+    if (adopt) {
+      tabs.adoptSerializedTab(adopt);
+      return;
+    }
     const initial = await window.pty!.initialCwd();
     void tabs.createTab(initial ?? undefined);
   })();

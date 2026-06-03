@@ -105,6 +105,41 @@ const api = {
   },
 };
 
+// Tab drag-out / move-to-window bridge. Payloads are opaque serialized tab
+// trees produced and consumed by the renderer; main only reads their ptyIds.
+type HitTestResult = {
+  kind: "self" | "other" | "none";
+  wcId?: number;
+  inTabbar?: boolean;
+};
+const winApi = {
+  // Spawn a new window that adopts the given tab's live sessions.
+  createWithTab(payload: unknown): Promise<boolean> {
+    return ipcRenderer.invoke("window:create-with-tab", payload);
+  },
+  // Claim the tab layout queued for this window on boot (null if none).
+  consumeAdopt(): Promise<unknown> {
+    return ipcRenderer.invoke("window:consume-adopt");
+  },
+  // Hand a tab to an already-open window (by its webContents id).
+  moveTab(payload: unknown, targetWcId: number): Promise<boolean> {
+    return ipcRenderer.invoke("window:move-tab", payload, targetWcId);
+  },
+  // Which window sits under a screen point, and is the point on its tab bar.
+  hitTest(x: number, y: number): Promise<HitTestResult> {
+    return ipcRenderer.invoke("window:hit-test", x, y);
+  },
+  // A drag dropped a tab onto this window's tab bar — rebuild it.
+  onAdoptTab(cb: (payload: unknown) => void) {
+    const listener = (_: Electron.IpcRendererEvent, payload: unknown) =>
+      cb(payload);
+    ipcRenderer.on("window:adopt-tab", listener);
+    return () => ipcRenderer.removeListener("window:adopt-tab", listener);
+  },
+};
+
 contextBridge.exposeInMainWorld("pty", api);
+contextBridge.exposeInMainWorld("win", winApi);
 
 export type PtyApi = typeof api;
+export type WinApi = typeof winApi;

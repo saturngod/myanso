@@ -168,8 +168,10 @@ function createSession(wc: WebContents, cwd?: string): string {
   };
   sessions.set(id, s);
 
+  // Read s.wc (not the captured `wc` param) so output follows a session
+  // after it's been handed to another window via transferSessions().
   pty.onData((data) => {
-    if (wc.isDestroyed()) return;
+    if (s.wc.isDestroyed()) return;
     s.buf += data;
     if (!s.ready) {
       if (s.buf.length > MAX_BUFFERED_CHARS) {
@@ -182,7 +184,7 @@ function createSession(wc: WebContents, cwd?: string): string {
   pty.onExit(({ exitCode }) => {
     if (s.ready) flush(id, s);
     sessions.delete(id);
-    if (!wc.isDestroyed()) wc.send("pty:exit", id, exitCode);
+    if (!s.wc.isDestroyed()) s.wc.send("pty:exit", id, exitCode);
   });
 
   return id;
@@ -240,6 +242,28 @@ export function initPtyHost(): void {
     if (s.flushTimer) clearTimeout(s.flushTimer);
     sessions.delete(id);
   });
+}
+
+// Hand a set of live sessions from one window to another without killing
+// the shells. Used by tab drag-out / move-to-window: the node-pty process
+// and its onData listener are untouched — only the destination WebContents
+// changes. ready is reset to false so output buffers until the new window's
+// renderer rebuilds the pane and calls pty:ready. Only sessions currently
+// owned by `from` are moved, so one window can't steal another's PTYs.
+export function transferSessions(
+  ids: string[],
+  from: WebContents,
+  to: WebContents,
+): string[] {
+  const moved: string[] = [];
+  for (const id of ids) {
+    const s = sessions.get(id);
+    if (!s || s.wc !== from) continue;
+    s.wc = to;
+    s.ready = false;
+    moved.push(id);
+  }
+  return moved;
 }
 
 // Tear down all PTYs owned by a window. Caller invokes on window close,

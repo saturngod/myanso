@@ -6,12 +6,46 @@ import {
   ipcMain,
   clipboard,
   shell,
+  webContents,
 } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { initPtyHost, killSessionsFor } from "./pty.js";
+import { initPtyHost, killSessionsFor, transferSessions } from "./pty.js";
+
+// A serialized tab handed across windows during tab drag-out. The shape is
+// opaque to main except for the ptyId fields it must collect for transfer.
+interface SerializedNode {
+  kind: "leaf" | "branch";
+  ptyId?: string;
+  a?: SerializedNode;
+  b?: SerializedNode;
+}
+interface SerializedTab {
+  tree: SerializedNode;
+}
+
+function collectPtyIds(node: SerializedNode | undefined, out: string[] = []): string[] {
+  if (!node) return out;
+  if (node.kind === "leaf") {
+    if (node.ptyId) out.push(node.ptyId);
+  } else {
+    collectPtyIds(node.a, out);
+    collectPtyIds(node.b, out);
+  }
+  return out;
+}
+
+// Tab payloads waiting for a freshly-spawned window's renderer to claim them
+// via window:consume-adopt once it has booted. Keyed by destination
+// webContents id.
+const adoptPayloads = new Map<number, SerializedTab>();
+
+// The titlebar/tab-strip occupies the top 36px of the window (see
+// #terminal-wrapper top:36px). A drop landing in this band targets the tab
+// bar; lower lands on the terminal body.
+const TABBAR_ZONE_PX = 40;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_NAME = "Myanso";
@@ -41,7 +75,7 @@ let pendingCwd: string | null = null;
 // in dev and to the unpacked app dir in production.
 const appIcon = nativeImage.createFromPath(join(app.getAppPath(), "icon.png"));
 
-function createWindow(): BrowserWindow {
+function createWindow(adopt?: SerializedTab): BrowserWindow {
   const win = new BrowserWindow({
     width: 1100,
     height: 700,
@@ -58,6 +92,10 @@ function createWindow(): BrowserWindow {
     },
   });
 
+  // Stash any adopt payload so the new renderer can claim it on boot via
+  // window:consume-adopt, instead of spawning its default first tab.
+  if (adopt) adoptPayloads.set(win.webContents.id, adopt);
+
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
@@ -73,7 +111,10 @@ function createWindow(): BrowserWindow {
   // Capture wc by reference so we can clean its sessions on close,
   // even though webContents is destroyed by the time `closed` fires.
   const wc = win.webContents;
-  win.on("closed", () => killSessionsFor(wc));
+  win.on("closed", () => {
+    adoptPayloads.delete(wc.id);
+    killSessionsFor(wc);
+  });
 
   // Push fullscreen state to the renderer so it can drop the 80px
   // traffic-light reservation when macOS hides them in native fullscreen.
@@ -244,6 +285,65 @@ ipcMain.handle("app:initial-cwd", () => {
   const c = pendingCwd;
   pendingCwd = null;
   return c;
+});
+
+// ---- Tab drag-out / move-to-window ------------------------------------
+// Drag a tab out: spawn a window, hand its live PTYs to the new window, and
+// stash the layout for the new renderer to rebuild on boot.
+ipcMain.handle(
+  "window:create-with-tab",
+  (e, payload: SerializedTab) => {
+    const ids = collectPtyIds(payload?.tree);
+    const win = createWindow(payload);
+    transferSessions(ids, e.sender, win.webContents);
+    return true;
+  },
+);
+
+// New renderer claims the tab layout queued for it (or null for a normal
+// window). One-shot: removed once consumed.
+ipcMain.handle("window:consume-adopt", (e) => {
+  const payload = adoptPayloads.get(e.sender.id) ?? null;
+  adoptPayloads.delete(e.sender.id);
+  return payload;
+});
+
+// Drop a tab onto an already-open window's tab bar: hand the PTYs over and
+// tell that window's renderer to rebuild the tab.
+ipcMain.handle(
+  "window:move-tab",
+  (e, payload: SerializedTab, targetWcId: number) => {
+    const target = webContents.fromId(targetWcId);
+    if (!target || target.isDestroyed()) return false;
+    const ids = collectPtyIds(payload?.tree);
+    transferSessions(ids, e.sender, target);
+    target.send("window:adopt-tab", payload);
+    return true;
+  },
+);
+
+// Locate the window under a screen point (for deciding drop target during a
+// tab drag). Prefers a window other than the dragging one so an overlapping
+// target wins. Returns whether the point lands in the tab-bar band.
+ipcMain.handle("window:hit-test", (e, x: number, y: number) => {
+  const all = BrowserWindow.getAllWindows().filter(
+    (w) => !w.isDestroyed() && w.isVisible() && !w.isMinimized(),
+  );
+  const ordered = [
+    ...all.filter((w) => w.webContents.id !== e.sender.id),
+    ...all.filter((w) => w.webContents.id === e.sender.id),
+  ];
+  for (const w of ordered) {
+    const b = w.getContentBounds();
+    if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) {
+      return {
+        kind: w.webContents.id === e.sender.id ? "self" : "other",
+        wcId: w.webContents.id,
+        inTabbar: y - b.y <= TABBAR_ZONE_PX,
+      };
+    }
+  }
+  return { kind: "none" };
 });
 
 // Resolve a Cmd/Ctrl-clicked terminal token to an existing file/dir path.

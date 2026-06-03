@@ -133,6 +133,11 @@
             .tab:hover {
                 color: var(--fg);
             }
+            /* Lifted state while a tab is being dragged (reorder / tear-off). */
+            .tab.dragging {
+                opacity: 0.55;
+                cursor: grabbing;
+            }
             .tab.active {
                 background: var(--tab-bg-active);
                 color: var(--fg);
