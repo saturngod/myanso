@@ -21,6 +21,8 @@ interface SettingsPanelOptions {
 
 interface SettingsPanel {
   open(): void;
+  /** Reflect an externally-applied change (e.g. font-size shortcut/menu). */
+  syncExternal(prefs: AppearancePrefs): void;
 }
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -307,5 +309,18 @@ export function initSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
     true,
   );
 
-  return { open };
+  // Keep the panel's notion of the applied prefs in step with changes made
+  // outside it (font-size shortcuts / View menu). If the panel is open, also
+  // refresh its visible controls so the slider tracks live.
+  function syncExternal(prefs: AppearancePrefs): void {
+    lastApplied = normalizeAppearance(prefs);
+    pending = { ...lastApplied };
+    if (!settingsModal.hidden) {
+      syncControlsFromPrefs(pending);
+      updatePreview(pending);
+      syncApplyButton();
+    }
+  }
+
+  return { open, syncExternal };
 }

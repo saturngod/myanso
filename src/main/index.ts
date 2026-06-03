@@ -242,6 +242,22 @@ function buildMenu(): void {
     {
       label: "View",
       submenu: [
+        shellItem(
+          "Increase Font Size",
+          isMac ? "Cmd+=" : "Ctrl+=",
+          "font-increase",
+        ),
+        shellItem(
+          "Decrease Font Size",
+          isMac ? "Cmd+-" : "Ctrl+-",
+          "font-decrease",
+        ),
+        shellItem(
+          "Reset Font Size",
+          isMac ? "Cmd+0" : "Ctrl+0",
+          "font-reset",
+        ),
+        { type: "separator" },
         ...(showDevMenuItems
           ? ([
               { role: "reload" },

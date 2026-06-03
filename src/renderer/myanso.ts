@@ -7,6 +7,8 @@ import {
   ansi256Palette,
   applyThemeVariables,
   buildTerminalFontFamily,
+  clampFontSize,
+  DEFAULT_APPEARANCE,
   loadAppearance,
   normalizeAppearance,
   saveAppearance,
@@ -2633,6 +2635,27 @@ class TabManager {
 
     if (this.handleClipboardShortcut(e)) return false;
 
+    // Font size, iTerm2-style: Cmd/Ctrl+= bigger, Cmd/Ctrl+- smaller,
+    // Cmd/Ctrl+0 reset to default. Equal covers Cmd++ too (Shift+=) so both
+    // "+" and "=" work without holding Shift.
+    if (!e.altKey) {
+      if (e.code === "Equal") {
+        e.preventDefault();
+        adjustFontSize(1);
+        return false;
+      }
+      if (e.code === "Minus") {
+        e.preventDefault();
+        adjustFontSize(-1);
+        return false;
+      }
+      if (e.code === "Digit0" && !e.shiftKey) {
+        e.preventDefault();
+        resetFontSize();
+        return false;
+      }
+    }
+
     // Find: Cmd+F (mac) / Ctrl+Shift+F (win/lin). Shift is required off-mac
     // so we don't clobber readline's Ctrl+F (forward-char), matching the
     // Ctrl+Shift+T/W convention above.
@@ -2835,6 +2858,37 @@ const settingsPanel = initSettingsPanel({
   },
 });
 
+// Apply a font-size change made outside the settings panel (Cmd+= / Cmd+- /
+// Cmd+0 or the View menu) and keep the panel in sync. iTerm2-style: bump,
+// shrink, or reset to the default.
+//
+// Each apply triggers a fit + PTY resize (SIGWINCH → shell redraw) + full
+// re-render across every pane, so firing it on every keystroke makes rapid
+// zooming stutter. We update the in-memory size and the live panel slider
+// immediately for instant feedback, but coalesce the heavy resize/persist
+// work onto a single trailing animation frame — a burst of presses collapses
+// to one resize.
+let fontApplyScheduled = false;
+function setFontSize(size: number): void {
+  const next = clampFontSize(size);
+  if (next === appearance.fontSize) return;
+  appearance = normalizeAppearance({ ...appearance, fontSize: next });
+  settingsPanel.syncExternal(appearance);
+  if (fontApplyScheduled) return;
+  fontApplyScheduled = true;
+  requestAnimationFrame(() => {
+    fontApplyScheduled = false;
+    saveAppearance(appearance);
+    tabs.applyAppearance(appearance);
+  });
+}
+function adjustFontSize(delta: number): void {
+  setFontSize(appearance.fontSize + delta);
+}
+function resetFontSize(): void {
+  setFontSize(DEFAULT_APPEARANCE.fontSize);
+}
+
 if (!window.pty) {
   const fallback = document.createElement("div");
   fallback.style.cssText =
@@ -2958,6 +3012,15 @@ window.pty?.onMenu((action) => {
       break;
     case "find":
       tabs.openFind();
+      break;
+    case "font-increase":
+      adjustFontSize(1);
+      break;
+    case "font-decrease":
+      adjustFontSize(-1);
+      break;
+    case "font-reset":
+      resetFontSize();
       break;
   }
 });
