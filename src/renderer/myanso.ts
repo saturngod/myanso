@@ -1337,6 +1337,15 @@ class PaneSession {
     const cursorY = buffer.cursorY + buffer.baseY;
     const cursorX = buffer.cursorX;
     const cursorRow = cursorY - startRow;
+    // Respect DECTCEM (ESC[?25l). TUI apps like Claude hide the hardware
+    // cursor while drawing their own UI; without this we'd paint a stray
+    // cursor block on their prompt lines.
+    const cursorHidden =
+      (
+        this.term as unknown as {
+          _core?: { coreService?: { isCursorHidden?: boolean } };
+        }
+      )._core?.coreService?.isCursorHidden === true;
     const cell = buffer.getNullCell();
     const hasDirtyRange = this.renderStart != null && this.renderEnd != null;
     const sizeChanged = cols !== this.lastCols || rows !== this.lastRows;
@@ -1413,7 +1422,8 @@ class PaneSession {
             c.getBgColorMode() !== 0 ||
             c.isBold() !== 0 ||
             c.isItalic() !== 0 ||
-            c.isDim() !== 0
+            c.isDim() !== 0 ||
+            c.isInverse() !== 0
           ) {
             plain = false;
             break;
@@ -1454,7 +1464,7 @@ class PaneSession {
         const c = line.getCell(x, cell);
         if (!c) continue;
 
-        if (isCursorLine && x === cursorX) {
+        if (isCursorLine && x === cursorX && !cursorHidden) {
           flush();
           let cch = " ";
           if (c.getWidth() !== 0) cch = c.getChars() || " ";
@@ -1468,8 +1478,17 @@ class PaneSession {
           continue;
         }
 
-        const fg = this.cellColor(c.getFgColor(), c.getFgColorMode());
-        const bg = this.cellColor(c.getBgColor(), c.getBgColorMode());
+        let fg = this.cellColor(c.getFgColor(), c.getFgColorMode());
+        let bg = this.cellColor(c.getBgColor(), c.getBgColorMode());
+        // Inverse video (SGR 7). TUI apps like Claude Code hide the hardware
+        // cursor and draw their own block cursor as an inverse cell, so we must
+        // swap fg/bg here or that cursor renders as invisible plain text.
+        // Default colors resolve to the theme's fg/bg before swapping.
+        if (c.isInverse() !== 0) {
+          const swap = fg ?? activeTheme.foreground;
+          fg = bg ?? activeTheme.background;
+          bg = swap;
+        }
         const bold = c.isBold() !== 0;
         const italic = c.isItalic() !== 0;
         const dim = c.isDim() !== 0;
@@ -1501,7 +1520,7 @@ class PaneSession {
 
       flush();
 
-      if (isCursorLine && cursorX >= cols) {
+      if (isCursorLine && cursorX >= cols && !cursorHidden) {
         const cursorClass = this.focused ? "cursor" : "cursor blurred";
         html += `<span class="${cursorClass}"> </span>`;
       }
