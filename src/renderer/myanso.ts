@@ -51,6 +51,10 @@ const MODE_RGB = 50331648;
 // truecolor-heavy output (vim, syntax highlighting) the cache turns a
 // per-cell string allocation into a Map hit.
 const rgbColorCache = new Map<number, string>();
+// Cap the cache so truecolor-heavy output (gradients, bat, image tools) can't
+// grow it without bound over a long-running session. Clearing wholesale is
+// fine here — entries are cheap to recompute and recent colors repopulate fast.
+const RGB_CACHE_MAX = 4096;
 function cssColor(color: number, mode: number): string | null {
   if (mode === 0) return null;
   if (mode === MODE_ANSI16 || mode === MODE_256) {
@@ -63,6 +67,7 @@ function cssColor(color: number, mode: number): string | null {
       const g = (color >> 8) & 255;
       const b = color & 255;
       s = `rgb(${r},${g},${b})`;
+      if (rgbColorCache.size >= RGB_CACHE_MAX) rgbColorCache.clear();
       rgbColorCache.set(color, s);
     }
     return s;
