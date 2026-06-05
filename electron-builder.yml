@@ -6,9 +6,12 @@ directories:
   output: dist
   buildResources: build
 
-# Compiled output + native deps; exclude dev cache
+# App source + native deps; exclude dev cache
 files:
-  - out/**/*
+  - main.js
+  - renderer.js
+  - index.html
+  - patches/**/*
   - node_modules/**/*
   - icon.png
   - "!node_modules/.cache"
@@ -33,7 +36,6 @@ mac:
     - target: dmg
       arch:
         - arm64
-        - x64
 
 dmg:
   title: Myanso ${version}
@@ -46,7 +48,7 @@ win:
   target: nsis
 
 linux:
-  icon: build/icons
+  icon: icon.png
   category: Development
   synopsis: Myanmar-aware terminal emulator
   description: Desktop terminal emulator with first-class support for Myanmar (Burmese) Unicode text rendering, tabs, and split panes.

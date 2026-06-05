@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <!-- Defense-in-depth. With nodeIntegration this is limited (running scripts
+       already have Node access), but it blocks injected remote/inline <script>
+       tags. style-src needs 'unsafe-inline' for the <style> block below;
+       img-src needs data: for the dropdown chevron SVG in that CSS. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'" />
+  <title>Myanso</title>
+  <link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css" />
+  <style>
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: #1e1e1e;
+      overflow: hidden;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* --- Tab bar (lives in the hiddenInset titlebar strip) --- */
+    #chrome {
+      flex: 0 0 38px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      -webkit-app-region: drag;
+      background: var(--chrome-top, #1e2029);
+      border-bottom: 1px solid var(--panel-border, #2a2d38);
+    }
+
+    /* Leave room for the macOS traffic lights. */
+    body.mac #chrome {
+      padding-left: 78px;
+    }
+
+    /* Fullscreen hides the traffic lights, so reclaim that space. */
+    body.mac.fullscreen #chrome {
+      padding-left: 10px;
+    }
+
+    #tabbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 100%;
+      -webkit-app-region: no-drag;
+      overflow-x: auto;
+      border-radius: 8px;
+    }
+
+    /* Highlight when a tab is being dragged over this window's bar. */
+    #tabbar.drop-target {
+      box-shadow: inset 0 0 0 2px var(--accent, #4c8bf5);
+    }
+
+    /* Floating chip that follows the cursor while dragging a tab. */
+    .tab-drag-ghost {
+      position: fixed;
+      z-index: 1000;
+      pointer-events: none;
+      transform: translate(8px, 8px);
+      padding: 3px 10px;
+      border-radius: 6px;
+      background: var(--tab-bg-active, #15171e);
+      color: var(--panel-fg, #e4e4e4);
+      border: 1px solid var(--panel-border, #2a2d38);
+      font: 12px -apple-system, "Segoe UI", sans-serif;
+      white-space: nowrap;
+      opacity: 0.9;
+    }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 26px;
+      padding: 0 6px 0 10px;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--panel-muted, #8b8f99);
+      font: 12px -apple-system, "Segoe UI", sans-serif;
+      white-space: nowrap;
+      cursor: default;
+      user-select: none;
+    }
+
+    .tab:hover {
+      background: var(--control-bg, rgba(255, 255, 255, 0.04));
+    }
+
+    .tab.active {
+      background: var(--tab-bg-active, #15171e);
+      color: var(--panel-fg, #e4e4e4);
+    }
+
+    .tab .close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      opacity: 0.55;
+      font-size: 14px;
+      line-height: 1;
+    }
+
+    .tab .close:hover {
+      opacity: 1;
+      background: var(--control-hover, rgba(255, 255, 255, 0.08));
+    }
+
+    .tab-add {
+      -webkit-app-region: no-drag;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      color: var(--panel-muted, #8b8f99);
+      font-size: 18px;
+      line-height: 1;
+      cursor: default;
+      user-select: none;
+    }
+
+    .tab-add:hover {
+      background: var(--control-hover, rgba(255, 255, 255, 0.08));
+      color: var(--panel-fg, #e4e4e4);
+    }
+
+    /* --- Panes / splits --- */
+    #panes {
+      flex: 1 1 auto;
+      position: relative;
+      min-height: 0;
+    }
+
+    .tab-pane-area {
+      position: absolute;
+      inset: 0;
+      display: flex;
+    }
+
+    .pane {
+      flex: 1 1 0;
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      padding: 1px;
+      box-sizing: border-box;
+      background: transparent;
+    }
+
+    /* Dim inactive panes (overlay toward the theme bg) so the focused one
+       stands out. The active pane renders at full brightness. A lone pane is
+       always the active one, so it's never dimmed. */
+    .pane::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      background: var(--pane-dim, rgba(0, 0, 0, 0.35));
+      pointer-events: none;
+      opacity: 1;
+      transition: opacity 0.12s ease;
+      z-index: 4;
+    }
+
+    .pane.active::after {
+      opacity: 0;
+    }
+
+    .pane-term {
+      position: absolute;
+      inset: 1px;
+      padding: 6px;
+      box-sizing: border-box;
+      background: var(--term-bg, #15171e);
+    }
+
+    .split {
+      flex: 1 1 0;
+      display: flex;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .split.split-row {
+      flex-direction: row;
+    }
+
+    .split.split-col {
+      flex-direction: column;
+    }
+
+    .split-child {
+      flex: 1 1 0;
+      display: flex;
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .divider {
+      flex: 0 0 6px;
+      background: var(--panel-border, #2a2d38);
+      z-index: 5;
+    }
+
+    .split-row>.divider {
+      cursor: col-resize;
+    }
+
+    .split-col>.divider {
+      cursor: row-resize;
+    }
+
+    /* While dragging a divider, don't let panes swallow the mouse move. */
+    body.resizing .pane-term {
+      pointer-events: none;
+    }
+
+    /* Settings panel */
+    #settings-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--overlay-bg, rgba(0, 0, 0, 0.5));
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.16s ease, visibility 0.16s ease;
+    }
+
+    #settings-overlay.open {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    #settings-panel {
+      width: 380px;
+      max-width: 90vw;
+      max-height: 86vh;
+      overflow-y: auto;
+      background: linear-gradient(var(--panel-top, #252526), var(--panel-bottom, #1e1e1e));
+      color: var(--panel-fg, #d4d4d4);
+      border: 1px solid var(--panel-border, #3c3c3c);
+      border-radius: 12px;
+      padding: 0;
+      font-family: -apple-system, "Segoe UI", sans-serif;
+      font-size: 13px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+      transform: translateY(10px) scale(0.98);
+      transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.3, 1);
+    }
+
+    #settings-overlay.open #settings-panel {
+      transform: none;
+    }
+
+    /* Header */
+    .settings-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--panel-border, #3c3c3c);
+      position: sticky;
+      top: 0;
+      background: var(--panel-top, #252526);
+      border-radius: 12px 12px 0 0;
+    }
+
+    .settings-header h2 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    #settings-x {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--panel-muted, #bbb);
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+
+    #settings-x:hover {
+      background: var(--control-bg, #1e1e1e);
+      color: var(--panel-fg, #d4d4d4);
+    }
+
+    .settings-body {
+      padding: 18px 20px 4px;
+    }
+
+    .setting-row {
+      margin-bottom: 18px;
+    }
+
+    .setting-row label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 7px;
+      color: var(--panel-muted, #bbb);
+      font-weight: 500;
+    }
+
+    .setting-row select,
+    .setting-row input[type="text"] {
+      width: 100%;
+      box-sizing: border-box;
+      background: var(--control-bg, #1e1e1e);
+      color: var(--panel-fg, #d4d4d4);
+      border: 1px solid var(--panel-border, #3c3c3c);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      transition: border-color 0.12s ease, box-shadow 0.12s ease;
+    }
+
+    /* Custom dropdown chevron (native arrow removed). */
+    .setting-row select {
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 30px;
+      cursor: pointer;
+    }
+
+    .setting-row select:focus,
+    .setting-row input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent, #0e639c);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #0e639c) 35%, transparent);
+    }
+
+    .setting-row input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 3px;
+      background: var(--panel-border, #3c3c3c);
+      accent-color: var(--accent, #0e639c);
+      cursor: pointer;
+    }
+
+    .setting-row input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent, #0e639c);
+      border: 2px solid var(--panel-top, #252526);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+      transition: transform 0.1s ease;
+    }
+
+    .setting-row input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.15);
+    }
+
+    /* Font-size value shown as a pill on the right of the label. */
+    .size-value {
+      color: var(--panel-fg, #fff);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      background: var(--control-bg, #1e1e1e);
+      border: 1px solid var(--panel-border, #3c3c3c);
+      border-radius: 5px;
+      padding: 1px 8px;
+      font-size: 12px;
+    }
+
+    /* Footer with side-by-side buttons. */
+    .settings-footer {
+      display: flex;
+      gap: 10px;
+      padding: 14px 20px 18px;
+      position: sticky;
+      bottom: 0;
+      background: var(--panel-bottom, #1e1e1e);
+      border-top: 1px solid var(--panel-border, #3c3c3c);
+    }
+
+    #settings-apply,
+    #settings-close {
+      flex: 1;
+      border-radius: 7px;
+      padding: 9px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+    }
+
+    /* Primary: Save & Apply. */
+    #settings-apply {
+      background: var(--apply-bg, #0e639c);
+      color: var(--apply-fg, #fff);
+      border: 1px solid var(--apply-border, transparent);
+    }
+
+    #settings-apply:hover {
+      background: var(--apply-bg-hover, #1177bb);
+    }
+
+    /* Secondary: Close (discard). */
+    #settings-close {
+      flex: 0 0 auto;
+      min-width: 92px;
+      background: transparent;
+      color: var(--panel-muted, #bbb);
+      border: 1px solid var(--panel-border, #3c3c3c);
+    }
+
+    #settings-close:hover {
+      background: var(--control-bg, #1e1e1e);
+      color: var(--panel-fg, #d4d4d4);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* Floating find bar — searches the active pane (Cmd+F). */
+    #find-bar {
+      position: fixed;
+      top: 46px;
+      right: 18px;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      background: linear-gradient(var(--panel-top, #252526), var(--panel-bottom, #1e1e1e));
+      color: var(--panel-fg, #d4d4d4);
+      border: 1px solid var(--panel-border, #3c3c3c);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-family: -apple-system, "Segoe UI", sans-serif;
+      font-size: 12px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+      z-index: 9;
+    }
+
+    #find-bar.open {
+      display: flex;
+    }
+
+    #find-input {
+      width: 200px;
+      background: var(--control-bg, #1e1e1e);
+      color: var(--panel-fg, #d4d4d4);
+      border: 1px solid var(--panel-border, #3c3c3c);
+      border-radius: 4px;
+      padding: 5px 7px;
+      font-size: 12px;
+    }
+
+    #find-count {
+      color: var(--panel-muted, #bbb);
+      min-width: 56px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #find-bar button {
+      background: transparent;
+      color: var(--panel-fg, #d4d4d4);
+      border: 1px solid transparent;
+      border-radius: 4px;
+      padding: 3px 6px;
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    #find-bar button:hover {
+      background: var(--control-bg, #1e1e1e);
+      border-color: var(--panel-border, #3c3c3c);
+    }
+  </style>
+</head>
+
+<body>
+  <div id="chrome">
+    <div id="tabbar"></div>
+    <div class="tab-add" id="tab-add" title="New tab (Cmd+T)">+</div>
+  </div>
+  <div id="panes"></div>
+
+  <div id="find-bar">
+    <input id="find-input" type="text" placeholder="Find" spellcheck="false" />
+    <span id="find-count"></span>
+    <button id="find-prev" title="Previous (Shift+Enter)">▲</button>
+    <button id="find-next" title="Next (Enter)">▼</button>
+    <button id="find-close" title="Close (Esc)">✕</button>
+  </div>
+
+  <div id="settings-overlay">
+    <div id="settings-panel">
+      <div class="settings-header">
+        <h2>Settings</h2>
+        <button id="settings-x" title="Close (Esc)">✕</button>
+      </div>
+
+      <div class="settings-body">
+        <div class="setting-row">
+          <label for="set-theme">Theme</label>
+          <select id="set-theme"></select>
+        </div>
+
+        <div class="setting-row">
+          <label for="set-font">Font</label>
+          <select id="set-font"></select>
+        </div>
+
+        <div class="setting-row" id="custom-font-row">
+          <label for="set-custom-font">Custom font family</label>
+          <input type="text" id="set-custom-font" placeholder="e.g. Menlo, 'Myanmar MN'" />
+        </div>
+
+        <div class="setting-row">
+          <label for="set-size">Font size <span class="size-value"><span id="size-value">14</span> px</span></label>
+          <input type="range" id="set-size" min="8" max="32" step="1" value="14" />
+        </div>
+
+        <div class="setting-row">
+          <label for="set-spacing">Line spacing</label>
+          <select id="set-spacing"></select>
+        </div>
+      </div>
+
+      <div class="settings-footer">
+        <button id="settings-close">Close</button>
+        <button id="settings-apply">Save & Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+
+</html>
