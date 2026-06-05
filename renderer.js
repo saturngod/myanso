@@ -797,16 +797,23 @@ function setActivePane(pane) {
 function activePaneOf(tab) {
   return panesByPtyId.get(tab.activePtyId) || leavesOf(tab.root)[0];
 }
-function tabDisplayName(tab) {
+// Full, untruncated name — used for the tooltip and the OS window title.
+function tabFullName(tab) {
   const p = activePaneOf(tab);
   if (!p) return 'shell';
   return p.title || basename(p.cwd) || 'shell';
 }
+// Short label shown in the (narrow) tab. Shell titles are often the whole path
+// (user@host:~/a/b/c); keep only the last segment ("c"). Plain titles set by
+// TUIs (e.g. "vim") have no "/" and pass through unchanged.
+function tabDisplayName(tab) {
+  const full = tabFullName(tab);
+  return full.includes('/') ? (basename(full) || full) : full;
+}
 function refreshTabTitle(tab) {
-  const name = tabDisplayName(tab);
-  if (tab.titleEl) tab.titleEl.textContent = name;
-  if (tab.btnEl) tab.btnEl.title = name;
-  if (tab === currentTab) document.title = name;
+  if (tab.titleEl) tab.titleEl.textContent = tabDisplayName(tab);
+  if (tab.btnEl) tab.btnEl.title = tabFullName(tab);
+  if (tab === currentTab) document.title = tabFullName(tab);
 }
 function onPaneTitleChanged(pane) {
   const tab = tabs.find((x) => x.id === pane.tabId);
@@ -973,7 +980,7 @@ function cyclePane(dir) {
 
 // --- Tabs -------------------------------------------------------------------
 
-function newTab() {
+function newTab(cwd) {
   const tab = {
     id: nextId('tab'),
     el: document.createElement('div'),
@@ -983,7 +990,7 @@ function newTab() {
   tab.el.className = 'tab-pane-area';
   document.getElementById('panes').appendChild(tab.el);
 
-  const pane = createPane(tab.id);
+  const pane = createPane(tab.id, cwd);
   tab.root = { leaf: true, pane };
   tab.activePtyId = pane.ptyId;
   tabs.push(tab);
@@ -1126,10 +1133,9 @@ function renderTabBar() {
     el.className = 'tab' + (tab === currentTab ? ' active' : '');
 
     const label = document.createElement('span');
-    const name = tabDisplayName(tab);
-    label.textContent = name;
+    label.textContent = tabDisplayName(tab);
     el.appendChild(label);
-    el.title = name;
+    el.title = tabFullName(tab);
     tab.titleEl = label;   // refreshTabTitle() updates these in place
     tab.btnEl = el;
 
@@ -1182,6 +1188,7 @@ ipcRenderer.on('tab-drag-over', (event, { active }) => {
 });
 
 ipcRenderer.on('new-tab', () => newTab());
+ipcRenderer.on('open-folder', (event, { path }) => newTab(path));
 ipcRenderer.on('close-pane', () => { if (activePane) closePane(activePane); });
 ipcRenderer.on('split-right', () => splitActive('row'));
 ipcRenderer.on('split-down', () => splitActive('col'));
@@ -1427,5 +1434,7 @@ ipcRenderer.on('fullscreen', (event, on) => {
 // "+" in the tab bar opens a new tab.
 document.getElementById('tab-add').addEventListener('click', () => newTab());
 
-// Open the first tab.
-newTab();
+// Open the first tab. If launched by dropping a folder on the dock icon, main
+// passes it via --myanso-open= so the first tab starts there instead of $HOME.
+const openArg = (process.argv.find((a) => a.startsWith('--myanso-open=')) || '').split('=').slice(1).join('=');
+newTab(openArg || undefined);

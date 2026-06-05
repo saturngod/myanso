@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, Menu, screen, nativeImage } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const os = require('os');
 const pty = require('node-pty');
 
@@ -33,6 +34,32 @@ const settingsMenuIcon = nativeImage.createFromDataURL(
 settingsMenuIcon.setTemplateImage(true);
 app.whenReady().then(() => {
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(iconPath);
+});
+
+// macOS: a folder (or file) dropped onto the dock icon, or `open` from Finder,
+// fires `open-file`. It can arrive BEFORE the app is ready (cold start), so the
+// handler is registered up here, outside whenReady. A file resolves to its
+// parent directory.
+function resolveDropDir(p) {
+  try { if (!fs.statSync(p).isDirectory()) return path.dirname(p); } catch (_) {}
+  return p;
+}
+
+// Folder dropped before the app is ready (cold start). The `ready` handler hands
+// it to the first window so its FIRST tab opens there — sending an IPC instead
+// would race the renderer's load and get dropped, leaving a stray home tab.
+let pendingOpenDir = null;
+
+app.on('open-file', (event, p) => {
+  event.preventDefault();
+  const dir = resolveDropDir(p);
+  if (!app.isReady()) { pendingOpenDir = dir; return; }
+  // App already running: open the folder in a new tab of the focused window.
+  const win = BrowserWindow.getFocusedWindow() ||
+    BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+  if (win) { win.webContents.send('open-folder', { path: dir }); return; }
+  // Running but all windows closed (macOS) — open a fresh window in that folder.
+  createWindow(undefined, dir);
 });
 
 // The app is multi-window. ptys live here in the main process (one per pane) and
@@ -69,11 +96,15 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
   // via pty-exit instead of crashing.
   let p;
   const opts = { name: 'xterm-color', cols: cols || 80, rows: rows || 24, env: ptyEnv() };
+  // Launch as a login shell so it sources the user's profile (.zprofile/.zshrc,
+  // .bash_profile) — that's where Homebrew/nvm add node etc. to PATH. Without -l,
+  // a shell spawned from a GUI Electron app misses them ("command not found: node").
+  const shellArgs = os.platform() === 'win32' ? [] : ['-l'];
   try {
-    p = pty.spawn(shellPath, [], { ...opts, cwd: cwd || homeDir });
+    p = pty.spawn(shellPath, shellArgs, { ...opts, cwd: cwd || homeDir });
   } catch (e) {
     try {
-      p = pty.spawn(shellPath, [], { ...opts, cwd: homeDir });
+      p = pty.spawn(shellPath, shellArgs, { ...opts, cwd: homeDir });
     } catch (e2) {
       const w = BrowserWindow.fromId(ownerWinId);
       if (w && !w.isDestroyed()) w.webContents.send('pty-exit', { id });
@@ -106,8 +137,12 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
   });
 }
 
-function createWindow(pos) {
+function createWindow(pos, initialDir) {
   const wid = ++widCounter;
+  // initialDir (optional): a folder dropped on the dock at cold start — the
+  // renderer opens its first tab here instead of $HOME.
+  const extraArgs = ['--myanso-wid=' + wid];
+  if (initialDir) extraArgs.push('--myanso-open=' + initialDir);
   const win = new BrowserWindow({
     width: 900,
     height: 600,
@@ -123,7 +158,7 @@ function createWindow(pos) {
       contextIsolation: false,
       // The renderer reads this to prefix its pty/tab ids so two windows never
       // generate the same id (e.g. pty_1).
-      additionalArguments: ['--myanso-wid=' + wid]
+      additionalArguments: extraArgs
     }
   });
 
@@ -414,7 +449,8 @@ function buildMenu() {
 app.on('ready', () => {
   setupIpc();
   buildMenu();
-  createWindow();
+  createWindow(undefined, pendingOpenDir);  // pendingOpenDir set if launched by a dock folder drop
+  pendingOpenDir = null;
 });
 
 app.on('window-all-closed', () => {

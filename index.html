@@ -55,7 +55,10 @@
       -webkit-app-region: no-drag;
       overflow-x: auto;
       border-radius: 8px;
+      scrollbar-width: none;        /* Firefox */
     }
+    /* Hide the horizontal scrollbar on the tab bar (still scrollable). */
+    #tabbar::-webkit-scrollbar { display: none; }
 
     /* Highlight when a tab is being dragged over this window's bar. */
     #tabbar.drop-target {
@@ -91,6 +94,20 @@
       white-space: nowrap;
       cursor: default;
       user-select: none;
+      /* Hug content at rest (flex-basis auto), but never wider than 200px and
+         shrinkable down to a ~72px floor when many tabs are open — so the bar
+         auto-resizes and the scrollbar only shows in extreme cases. */
+      flex: 0 1 auto;
+      min-width: 72px;
+      max-width: 200px;
+    }
+
+    /* Let the title truncate with … instead of forcing the tab wider. */
+    .tab > span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
     }
 
     .tab:hover {
@@ -106,6 +123,7 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      flex: none;
       width: 16px;
       height: 16px;
       border-radius: 4px;
