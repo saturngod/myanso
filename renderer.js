@@ -498,16 +498,22 @@ function fontFamilyFor(s) {
   return `${base}, ${MYANMAR_FALLBACK}`;
 }
 
-// --- Per-screen Myanmar mark width -----------------------------------------
-// macOS's wcwidth (used by zsh's line editor on the normal screen) counts ALL
-// Myanmar combining/vowel marks as width 0; modern TUIs (vim, Claude Code, agy)
-// and iTerm2 use the Unicode-standard width: *non-spacing* marks (Mn: ◌ိ ◌ု ◌်…)
-// = 0, but *spacing* marks (Mc: ◌ာ ◌း ◌ြ ◌ေ…) = 1. One fixed width breaks one
-// side, so we switch per screen:
-//   normal screen → 'myan-shell' (all marks 0) to match zsh.
-//   alt screen    → 'myan-std' (standard Mn=0 / Mc=1) to match the TUIs.
-// isMyanmarMark = the full mark range (used for the all-0 shell provider and to
-// mirror MARK() in the xterm patch). isMyanmarNonspacing = just the Mn subset.
+// --- Myanmar mark width (per screen + per app) -----------------------------
+// Apps disagree on how wide a Myanmar combining/vowel mark is, and no single width
+// satisfies all of them, so we register three width providers per term and switch
+// the active one by screen and foreground app (see apply() below):
+//   'myan-shell'  — every mark width 0, joined onto its base. Matches zsh's line
+//                   editor (macOS wcwidth counts all marks 0). Normal-screen default.
+//   'myan-std'    — Unicode-standard: non-spacing marks (Mn) 0, spacing marks (Mc,
+//                   e.g. ◌ာ ◌း ◌ြ) 1. Matches iTerm2 / vim / agy. Alt-screen default.
+//   'myan-allone' — every mark width 1 (own cell). For apps that count all marks as
+//                   1 (Claude Code); without it they leave gaps (ဘူး → "ဘူ း").
+// The foreground app is detected in main.js (pollPtyProcesses) → 'pty-process' IPC
+// → paneWantsAllOne(). Mark *shaping* (merging a cluster into one span) is done by
+// the xterm patch, independent of width.
+//
+// isMyanmarMark = the full Myanmar mark range (mirrors MARK() in the xterm patch);
+// isMyanmarNonspacing = just the Mn (non-spacing) subset.
 function isMyanmarMark(c) {
   return (c >= 0x102b && c <= 0x103e) || (c >= 0x1056 && c <= 0x1059) ||
          (c >= 0x105e && c <= 0x1060) || (c >= 0x1062 && c <= 0x1064) ||
@@ -554,33 +560,20 @@ function setupMarkWidth(term) {
   }
   if (!base) return;
 
-  // Normal screen (zsh): every Myanmar mark width 0, joined onto the base.
-  term.unicode.register({
-    version: 'myan-shell',
-    wcwidth: (c) => (isMyanmarMark(c) ? 0 : base.wcwidth(c)),
-    charProperties: (c, preceding) =>
-      packMyanProps(isMyanmarMark(c) ? 0 : base.wcwidth(c), preceding),
-  });
+  // Each provider forces a width on the Myanmar marks it targets and defers every
+  // other codepoint to the base provider (so wide glyphs, emoji, non-Myanmar
+  // combining, etc. keep xterm's native handling).
+  const provider = (version, isForced, forcedWidth) =>
+    term.unicode.register({
+      version,
+      wcwidth: (c) => (isForced(c) ? forcedWidth : base.wcwidth(c)),
+      charProperties: (c, preceding) =>
+        isForced(c) ? packMyanProps(forcedWidth, preceding) : base.charProperties(c, preceding),
+    });
 
-  // Alt screen (TUIs): standard widths — non-spacing marks 0 (joined), spacing
-  // marks 1. Matches iTerm2 and most apps' own wcwidth (vim, agy), so columns agree.
-  term.unicode.register({
-    version: 'myan-std',
-    wcwidth: (c) => (isMyanmarNonspacing(c) ? 0 : base.wcwidth(c)),
-    charProperties: (c, preceding) =>
-      packMyanProps(isMyanmarNonspacing(c) ? 0 : base.wcwidth(c), preceding),
-  });
-
-  // EVERY Myanmar mark width 1 (own cell, never join). Some apps (Claude Code)
-  // count all marks as 1 in their own layout, so they reserve a column the other
-  // providers don't draw, leaving gaps (ဘူး → "ဘူ း"). Used per-app, see
-  // MARK_WIDTH_ALL_ONE_APPS. The shaping patch still merges the cluster's span.
-  term.unicode.register({
-    version: 'myan-allone',
-    wcwidth: (c) => (isMyanmarMark(c) ? 1 : base.wcwidth(c)),
-    charProperties: (c, preceding) =>
-      isMyanmarMark(c) ? ((1 << 1) | 0) : base.charProperties(c, preceding),
-  });
+  provider('myan-shell', isMyanmarMark, 0);          // all marks 0, joined (zsh)
+  provider('myan-std', isMyanmarNonspacing, 0);      // Mn 0 (joined), Mc 1 (vim/agy)
+  provider('myan-allone', isMyanmarMark, 1);         // all marks 1, own cell (Claude Code)
 
   // Width depends on the foreground app AND the screen:
   //   Claude Code (any screen) → all marks width 1 ('myan-allone').
