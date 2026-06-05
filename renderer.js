@@ -563,7 +563,7 @@ function setupMarkWidth(term) {
   });
 
   // Alt screen (TUIs): standard widths — non-spacing marks 0 (joined), spacing
-  // marks 1. Matches iTerm2 and the apps' own wcwidth, so column counts agree.
+  // marks 1. Matches iTerm2 and most apps' own wcwidth (vim, agy), so columns agree.
   term.unicode.register({
     version: 'myan-std',
     wcwidth: (c) => (isMyanmarNonspacing(c) ? 0 : base.wcwidth(c)),
@@ -571,12 +571,60 @@ function setupMarkWidth(term) {
       packMyanProps(isMyanmarNonspacing(c) ? 0 : base.wcwidth(c), preceding),
   });
 
+  // EVERY Myanmar mark width 1 (own cell, never join). Some apps (Claude Code)
+  // count all marks as 1 in their own layout, so they reserve a column the other
+  // providers don't draw, leaving gaps (ဘူး → "ဘူ း"). Used per-app, see
+  // MARK_WIDTH_ALL_ONE_APPS. The shaping patch still merges the cluster's span.
+  term.unicode.register({
+    version: 'myan-allone',
+    wcwidth: (c) => (isMyanmarMark(c) ? 1 : base.wcwidth(c)),
+    charProperties: (c, preceding) =>
+      isMyanmarMark(c) ? ((1 << 1) | 0) : base.charProperties(c, preceding),
+  });
+
+  // Width depends on the foreground app AND the screen:
+  //   Claude Code (any screen) → all marks width 1 ('myan-allone').
+  //   alt screen (vim, …)      → standard ('myan-std').
+  //   normal screen (zsh, agy) → all marks width 0, joined ('myan-shell').
+  // term._myanForceAllOne is set by the pty-process IPC handler.
   const apply = () => {
-    term.unicode.activeVersion =
-      term.buffer.active.type === 'alternate' ? 'myan-std' : 'myan-shell';
+    term.unicode.activeVersion = term._myanForceAllOne
+      ? 'myan-allone'
+      : (term.buffer.active.type === 'alternate' ? 'myan-std' : 'myan-shell');
   };
+  term._applyMyanWidth = apply;   // let the pty-process handler re-apply on app change
   term.buffer.onBufferChange(apply);
   apply();
+}
+
+// Decide if a pane needs the 'myan-allone' provider (every Myanmar mark width 1).
+// Claude Code is the app that does this. We identify it from two signals, both
+// version-independent:
+//   1. The terminal title it sets via OSC 2 — "Claude Code" (see onTitleChange).
+//   2. Its foreground process name — a bare version string like "2.1.165" (it
+//      sets process.title to the version), or "claude".
+// A plain shell in the foreground means no TUI is running, so we never force then
+// — this also stops a *stale* "Claude Code" title from sticking after you quit it.
+const ALL_ONE_NAMES = ['claude'];          // foreground process name substrings
+const ALL_ONE_TITLE = /claude/i;           // OSC terminal title
+const SEMVER_FG = /^\d+\.\d+\.\d+/;        // Claude Code's process.title (version)
+const SHELL_FG = /^-?(zsh|bash|fish|dash|sh|ksh|tcsh|csh)$/;
+
+function paneWantsAllOne(pane) {
+  const fg = (pane._fgProcess || '').toLowerCase();
+  if (fg === '' || SHELL_FG.test(fg)) return false;    // plain shell: no TUI running
+  if (SEMVER_FG.test(fg) || ALL_ONE_NAMES.some((a) => fg.includes(a))) return true;
+  return ALL_ONE_TITLE.test(pane.title || '');         // fall back to the app's title
+}
+
+function updatePaneMarkWidth(pane) {
+  if (!pane) return;
+  const term = pane.term;
+  if (!term || !term._applyMyanWidth) return;           // mountPane will re-apply later
+  const force = paneWantsAllOne(pane);
+  if (term._myanForceAllOne === force) return;          // no change
+  term._myanForceAllOne = force;
+  term._applyMyanWidth();
 }
 
 // Shift+Enter: xterm sends a bare CR (0x0d, same as Enter), so TUIs like Claude
@@ -720,7 +768,7 @@ function createPane(tabId, cwd, reattach) {
   });
 
   // Shell title via OSC 0 (icon+title) / OSC 2 (title) — xterm parses both.
-  term.onTitleChange((title) => { pane.title = title; onPaneTitleChanged(pane); });
+  term.onTitleChange((title) => { pane.title = title; onPaneTitleChanged(pane); updatePaneMarkWidth(pane); });
   // Working directory via OSC 7 (file://host/path) for the title fallback.
   term.parser.registerOscHandler(7, (data) => {
     pane.cwd = parseOsc7(data);
@@ -770,6 +818,7 @@ function mountPane(pane) {
     for (const d of queued) { try { pane.term.write(d); } catch (e) { } }
   }
   setupMarkWidth(pane.term);
+  updatePaneMarkWidth(pane);   // apply width for the app already running (if known)
   pane.term.textarea.addEventListener('focus', () => setActivePane(pane));
   // Refit (and tell the pty) whenever the host's box changes — covers window
   // resize, divider drags, and a tab becoming visible.
@@ -1234,6 +1283,11 @@ ipcRenderer.on('pty-exit', (event, { id }) => {
   pendingData.delete(id);
   const pane = panesByPtyId.get(id);
   if (pane) closePane(pane);
+});
+// Foreground app changed in this pty — pick the Myanmar mark width it expects.
+ipcRenderer.on('pty-process', (event, { id, name }) => {
+  const pane = panesByPtyId.get(id);
+  if (pane) { pane._fgProcess = name; updatePaneMarkWidth(pane); }
 });
 
 ipcRenderer.on('adopt-tab', (event, { descriptor }) => adoptTab(descriptor));

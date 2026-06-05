@@ -58,6 +58,9 @@ if (process.platform === 'darwin') {
 }
 app.whenReady().then(() => {
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(iconPath);
+  // Watch each pty's foreground process so the renderer can switch Myanmar mark
+  // width per app (see pollPtyProcesses). 600ms is plenty for app switches.
+  setInterval(pollPtyProcesses, 600);
 });
 
 // macOS: a folder (or file) dropped onto the dock icon, or `open` from Finder,
@@ -113,6 +116,23 @@ function flushPtyBuffers() {
   }
 }
 
+// Apps disagree on Myanmar mark widths (e.g. Claude Code counts every mark as 1,
+// while zsh/agy count them as 0), so the renderer picks the width per foreground
+// app. node-pty exposes the tty's current foreground process via `.process`; poll
+// it and tell the owner window when it changes. Set MYAN_DEBUG_PROC=1 to log the
+// reported names (useful when adding an app to the width lists in renderer.js).
+function pollPtyProcesses() {
+  for (const [id, rec] of ptys) {
+    let name = '';
+    try { name = (rec.proc.process || '').toString(); } catch (e) { /* dead pty */ }
+    if (name === rec.lastProcess) continue;
+    rec.lastProcess = name;
+    if (process.env.MYAN_DEBUG_PROC) console.log('[myan] pty', id, 'foreground:', JSON.stringify(name));
+    const w = ownerWindow(id);
+    if (w) w.webContents.send('pty-process', { id, name });
+  }
+}
+
 function spawnPty(id, cols, rows, cwd, ownerWinId) {
   // pty.spawn can throw (missing shell, bad cwd, fork refused). An uncaught
   // Napi error aborts the whole process, so guard it: retry from homeDir if a
@@ -136,7 +156,7 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
       return;
     }
   }
-  ptys.set(id, { proc: p, ownerWinId });
+  ptys.set(id, { proc: p, ownerWinId, lastProcess: '' });
   p.on('data', (data) => {
     // Strip synchronized-output markers (DEC mode 2026 set/reset). xterm.js 6 has
     // a bug: when a Myanmar combining mark joins an existing cell *inside* a 2026
