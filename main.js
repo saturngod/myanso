@@ -40,12 +40,22 @@ function ptyEnv() {
 // manually. Packaged builds get their icon from electron-builder.yml instead.
 const iconPath = path.join(__dirname, 'icon.png');
 
-// Gear icon for the Settings menu item on Windows/Linux (macOS uses a glyph in
-// the label instead). Template image so it adapts to light/dark menus.
-const settingsMenuIcon = nativeImage.createFromDataURL(
-  "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'><g fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'><path d='M6.6 1.6h2.8l.4 1.8 1.4.6 1.6-1 1.6 2.5-1.4 1.2v1.6l1.4 1.2-1.6 2.5-1.6-1-1.4.6-.4 1.8H6.6l-.4-1.8-1.4-.6-1.6 1-1.6-2.5L3 8.3V6.7L1.6 5.5 3.2 3l1.6 1 1.4-.6z'/><circle cx='8' cy='7.5' r='2.2'/></g></svg>",
-);
-settingsMenuIcon.setTemplateImage(true);
+// Gear icon for the Settings menu item. On macOS use the native SF Symbol
+// "gear" (Electron 42+ resolves SF Symbol names via createFromNamedImage),
+// resized to menu-icon height and flagged as a template image so it tints for
+// light/dark and highlight just like a real menu icon. nativeImage can't render
+// SVG and named images don't exist off macOS, so other platforms get no icon
+// and rely on the "Preferences…" label.
+let settingsMenuIcon = null;
+if (process.platform === 'darwin') {
+  // The SF Symbol comes back as a single 34x32-pixel raster (no vector rep), so
+  // resizing it down blurs on Retina. Instead reinterpret those pixels as the
+  // @2x representation of a 17x16-point icon: the menu uses the full-resolution
+  // pixels, staying crisp. Template image so it tints for light/dark/highlight.
+  const src = nativeImage.createFromNamedImage('gear', [0, 0, 0, 1]);
+  settingsMenuIcon = nativeImage.createFromBuffer(src.toPNG(), { scaleFactor: 2 });
+  settingsMenuIcon.setTemplateImage(true);
+}
 app.whenReady().then(() => {
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(iconPath);
 });
@@ -387,14 +397,14 @@ function buildMenu() {
     return w ? (tabCounts.get(w.id) || 0) : 0;
   })();
 
-  // macOS can't show a custom icon next to a non-role menu item in the system
-  // style, so use a gear glyph in the label there; Windows/Linux take a template
-  // image instead.
+  // macOS gets the native SF Symbol gear next to the item; other platforms have
+  // no usable icon source, so they rely on the label. Linux follows GNOME
+  // convention: "Preferences" under Edit.
   const settingsItem = {
-    label: isMac ? '⚙  Settings…' : 'Settings…',
+    label: isMac ? 'Settings…' : 'Preferences…',
     accelerator: 'CmdOrCtrl+,',
     click: send('open-settings'),
-    ...(isMac ? {} : { icon: settingsMenuIcon })
+    ...(settingsMenuIcon ? { icon: settingsMenuIcon } : {})
   };
 
   const shellMenu = {
@@ -457,14 +467,36 @@ function buildMenu() {
       : [{ role: 'minimize' }]
   };
 
+  // On Linux (GNOME style), Preferences goes under Edit menu, not the App menu.
+  // macOS keeps Settings under the app name menu; Windows keeps it under App.
+  const isLinux = process.platform === 'linux';
+  const editMenu = isLinux
+    ? {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' },
+          { role: 'redo' },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'selectAll' },
+          { type: 'separator' },
+          settingsItem
+        ]
+      }
+    : { role: 'editMenu' };
+
   const template = [
     {
       label: isMac ? app.name : 'App',
       submenu: isMac
         ? [{ role: 'about' }, { type: 'separator' }, settingsItem, { type: 'separator' }, { role: 'quit' }]
-        : [settingsItem, { type: 'separator' }, { role: 'quit' }]
+        : isLinux
+          ? [{ role: 'quit' }]
+          : [settingsItem, { type: 'separator' }, { role: 'quit' }]
     },
-    { role: 'editMenu' },
+    editMenu,
     shellMenu,
     viewMenu,
     windowMenu
