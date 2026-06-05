@@ -13,8 +13,16 @@ const path = require('path');
 const WID = (process.argv.find((a) => a.startsWith('--myanso-wid=')) || '').split('=')[1] || '0';
 ipcRenderer.send('renderer-ready');
 
-// Single-quote a path for POSIX shells, escaping embedded single quotes.
+const IS_WIN = process.platform === 'win32';
+
+// Quote a file path for the current shell so it can be pasted safely.
+// PowerShell uses single quotes with '' for embedded single quotes;
+// POSIX shells use '\'' (close-quote, escaped quote, re-open quote).
 function quoteShellPath(p) {
+  if (IS_WIN) {
+    // PowerShell: wrap in single quotes; double any embedded single quotes.
+    return `'${p.replace(/'/g, "''")}'`;
+  }
   return `'${p.replace(/'/g, `'\\''`)}'`;
 }
 
@@ -443,9 +451,13 @@ function themeFor(s) {
 }
 
 // Built-in monospace font choices (ASCII base; Myanmar fallback added at apply).
+// Includes Windows-native fonts (Cascadia Code, Consolas) so the defaults look
+// right on every platform.
 const FONTS = {
   menlo: { name: 'Menlo', family: 'Menlo, Monaco, "Ubuntu Mono", "DejaVu Sans Mono"' },
   monaco: { name: 'Monaco', family: 'Monaco' },
+  cascadia: { name: 'Cascadia Code', family: '"Cascadia Code", Consolas' },
+  consolas: { name: 'Consolas', family: 'Consolas, "Courier New"' },
   courier: { name: 'Courier New', family: '"Courier New"' },
   sfmono: { name: 'SF Mono', family: '"SF Mono", Menlo' },
   custom: { name: 'Custom…', family: '' }
@@ -459,7 +471,7 @@ const SPACINGS = {
   presentation: { name: 'Presentation', value: 2.0 }
 };
 
-const DEFAULTS = { theme: DEFAULT_THEME, font: 'menlo', customFont: '', fontSize: 14, spacing: 'normal' };
+const DEFAULTS = { theme: DEFAULT_THEME, font: IS_WIN ? 'cascadia' : 'menlo', customFont: '', fontSize: 14, spacing: 'normal' };
 
 function loadSettings() {
   try {
@@ -479,8 +491,9 @@ let settings = loadSettings();
 if (!THEMES[settings.theme]) settings.theme = DEFAULT_THEME;
 
 function fontFamilyFor(s) {
+  const DEFAULT_BASE = IS_WIN ? 'Consolas' : 'Menlo';
   const base = s.font === 'custom'
-    ? (s.customFont.trim() || 'Menlo')
+    ? (s.customFont.trim() || DEFAULT_BASE)
     : (FONTS[s.font] || FONTS.menlo).family;
   return `${base}, ${MYANMAR_FALLBACK}`;
 }
@@ -687,14 +700,18 @@ function createPane(tabId, cwd, reattach) {
   return pane;
 }
 
-// OSC 7 payload is a file URL (file://host/abs/path). Return the decoded path.
+// Use fileURLToPath so Windows drive-letter URIs (file:///C:/x) decode to the
+// native path (C:\x) correctly. Falls back to manual URL parsing if it fails.
 function parseOsc7(data) {
-  try { return decodeURIComponent(new URL(data).pathname); } catch (e) { return ''; }
+  try { return fileURLToPath(data); } catch (e) {
+    try { return decodeURIComponent(new URL(data).pathname); } catch (_) { return ''; }
+  }
 }
 function basename(p) {
   if (!p) return '';
-  const parts = p.replace(/\/+$/, '').split('/');
-  return parts[parts.length - 1] || '/';
+  // Handle both POSIX (/) and Windows (\) path separators.
+  const parts = p.replace(/[/\\]+$/, '').split(/[/\\]/);
+  return parts[parts.length - 1] || (IS_WIN ? '' : '/');
 }
 
 // Open the terminal only once its element is attached to the document. xterm

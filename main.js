@@ -4,7 +4,21 @@ const fs = require('fs');
 const os = require('os');
 const pty = require('node-pty');
 
-const shellPath = os.platform() === 'win32' ? 'powershell.exe' : (process.env.SHELL || 'bash');
+// On Windows prefer PowerShell 7 (pwsh) if installed — it has better Unicode
+// handling, modern scripting, and cross-platform consistency. Falls back to the
+// built-in Windows PowerShell 5.1 (powershell.exe) when pwsh isn't on PATH.
+function resolveShell() {
+  if (os.platform() !== 'win32') return process.env.SHELL || 'bash';
+  try {
+    // `where` is the Windows equivalent of `which`. Throws if not found.
+    const { execSync } = require('child_process');
+    execSync('where pwsh.exe', { stdio: 'ignore' });
+    return 'pwsh.exe';
+  } catch (_) {
+    return 'powershell.exe';
+  }
+}
+const shellPath = resolveShell();
 const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
 
 // A packaged .app launched from Finder/Dock does NOT inherit the terminal's
@@ -99,7 +113,8 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
   // Launch as a login shell so it sources the user's profile (.zprofile/.zshrc,
   // .bash_profile) — that's where Homebrew/nvm add node etc. to PATH. Without -l,
   // a shell spawned from a GUI Electron app misses them ("command not found: node").
-  const shellArgs = os.platform() === 'win32' ? [] : ['-l'];
+  // PowerShell: use -NoLogo to skip the banner (PS7 and 5.1 both support it).
+  const shellArgs = os.platform() === 'win32' ? ['-NoLogo'] : ['-l'];
   try {
     p = pty.spawn(shellPath, shellArgs, { ...opts, cwd: cwd || homeDir });
   } catch (e) {
