@@ -513,17 +513,20 @@ function isMyanmarMark(c) {
 }
 
 function setupMarkWidth(term) {
-  // The default provider ('6') gives marks width 1 (alt-screen behavior). We
-  // register a second provider that forces marks to 0 for the normal screen.
+  // We register two providers and switch per screen:
+  //   'myan-shell' (normal screen) — marks width 0, so they join the base cell;
+  //     zsh's line editor counts them as 0, so editing stays aligned.
+  //   'myan-alt'   (alt screen)    — marks width 1, matching TUIs (vim, Claude
+  //     Code), so column counts agree and no spurious gaps appear.
   let base;
   try {
     // PRIVATE API: reaches into xterm's _core to wrap the active width provider.
     // Pinned to xterm v6 internals — a version bump that restructures
     // unicodeService/_providers will land in the catch below and silently fall
-    // back to default width-1 marks. Re-derive this path when bumping xterm.
+    // back to default widths. Re-derive this path when bumping xterm.
     base = term._core.unicodeService._providers[term.unicode.activeVersion];
   } catch (e) {
-    return; // internals changed; fall back to the default (width 1 everywhere).
+    return; // internals changed; fall back to the default.
   }
   if (!base) return;
 
@@ -544,8 +547,22 @@ function setupMarkWidth(term) {
     }
   });
 
+  // Alt screen: force EVERY Myanmar mark to width 1. xterm's stock '6' provider
+  // only makes *spacing* marks (◌ာ ◌း) width 1 and still gives *non-spacing*
+  // marks (◌ိ ◌ီ ◌ု ◌ူ ◌ဲ ◌ံ ◌့ ◌်) width 0 — which is one column narrower
+  // than what TUIs like Claude Code reserve, so the next glyph is shifted and a
+  // gap appears (ကူ → "ကူ ", ဘူး → "ဘူ း"). Width 1 keeps the terminal in sync;
+  // the shaping patch still collapses the cluster's cells into one span.
+  term.unicode.register({
+    version: 'myan-alt',
+    wcwidth: (c) => (isMyanmarMark(c) ? 1 : base.wcwidth(c)),
+    charProperties: (c, preceding) =>
+      isMyanmarMark(c) ? ((1 << 1) | 0)        // width 1, never join
+                       : base.charProperties(c, preceding),
+  });
+
   const apply = () => {
-    term.unicode.activeVersion = term.buffer.active.type === 'alternate' ? '6' : 'myan-shell';
+    term.unicode.activeVersion = term.buffer.active.type === 'alternate' ? 'myan-alt' : 'myan-shell';
   };
   term.buffer.onBufferChange(apply);
   apply();
