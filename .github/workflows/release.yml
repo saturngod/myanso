@@ -62,8 +62,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Electron bundles
-        run: npm run build
+      - name: Patch xterm for Myanmar rendering
+        run: node patches/patch-xterm-myanmar.js
 
       - name: Package with electron-builder
         env:
