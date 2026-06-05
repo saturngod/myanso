@@ -523,6 +523,49 @@
       background: var(--control-bg, #1e1e1e);
       border-color: var(--panel-border, #3c3c3c);
     }
+
+    /* --- Pane right-click context menu --- */
+    .pane-menu {
+      position: fixed;
+      z-index: 1000;
+      min-width: 190px;
+      padding: 6px;
+      background: var(--chrome-top, #1e2029);
+      border: 1px solid var(--panel-border, #2a2d38);
+      border-radius: 10px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+      font-family: -apple-system, "Segoe UI", sans-serif;
+      font-size: 14px;
+      color: var(--panel-fg, #d4d4d4);
+      user-select: none;
+    }
+
+    .pane-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 7px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .pane-menu-item:hover {
+      background: var(--control-hover, rgba(255, 255, 255, 0.08));
+    }
+
+    .pane-menu-icon {
+      width: 17px;
+      height: 17px;
+      flex: 0 0 17px;
+      opacity: 0.85;
+    }
+
+    .pane-menu-sep {
+      height: 1px;
+      margin: 6px 8px;
+      background: var(--panel-border, #2a2d38);
+    }
   </style>
 </head>
 

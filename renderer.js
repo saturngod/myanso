@@ -1,4 +1,4 @@
-const { ipcRenderer, shell, webUtils } = require('electron');
+const { ipcRenderer, shell, webUtils, clipboard } = require('electron');
 const { fileURLToPath } = require('url');
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
@@ -668,6 +668,13 @@ function createPane(tabId, cwd, reattach) {
   // Focus this pane when its element is clicked.
   el.addEventListener('mousedown', () => setActivePane(pane));
 
+  // Right-click → custom context menu (Copy when text is selected, Paste, splits).
+  el.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    setActivePane(pane);
+    showPaneMenu(e.clientX, e.clientY, pane);
+  });
+
   // Drag & drop a file (or folder) onto a pane → type its full path (no cd,
   // no Enter) so it works in the shell and in TUIs like Claude Code.
   el.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); });
@@ -920,7 +927,8 @@ function renderTab(tab) {
   requestAnimationFrame(() => leaves.forEach(fitPane));
 }
 
-function splitActive(dir) {
+// `before` true puts the new pane ahead of the active one (Split Left / Split Up).
+function splitActive(dir, before) {
   if (!currentTab || !activePane) return;
   const found = findParentOf(currentTab.root, activePane);
   // Locate the leaf node holding the active pane (root itself if unsplit).
@@ -940,8 +948,10 @@ function splitActive(dir) {
   leaf.leaf = false;
   leaf.dir = dir;
   leaf.ratio = 0.5;
-  leaf.a = { leaf: true, pane: oldPane };
-  leaf.b = { leaf: true, pane: newPane };
+  const oldNode = { leaf: true, pane: oldPane };
+  const newNode = { leaf: true, pane: newPane };
+  leaf.a = before ? newNode : oldNode;
+  leaf.b = before ? oldNode : newNode;
   delete leaf.pane;
 
   renderTab(currentTab);
@@ -1203,6 +1213,84 @@ ipcRenderer.on('remove-tab', (event, { tabId }) => removeTabKeepPtys(tabId));
 ipcRenderer.on('tab-drag-over', (event, { active }) => {
   document.getElementById('tabbar').classList.toggle('drop-target', active);
 });
+
+// --- Pane right-click context menu ------------------------------------------
+// A single floating menu element, reused for every pane. Built on demand.
+function copyPane(pane) {
+  const sel = pane && pane.term.getSelection();
+  if (sel) clipboard.writeText(sel);
+}
+function pastePane(pane) {
+  const text = clipboard.readText();
+  // term.paste emits bracketed-paste markers so TUIs treat it as pasted text.
+  if (text) pane.term.paste(text);
+}
+
+// Inline SVG icons (currentColor) for the menu rows. The split icons fill the
+// half of a rounded rect that the new pane will occupy.
+const MENU_ICONS = {
+  copy: '<rect x="6" y="6" width="9" height="9" rx="2"/><path d="M11 3H5a2 2 0 0 0-2 2v6"/>',
+  paste: '<rect x="4" y="4" width="11" height="12" rx="2"/><path d="M7 4V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1"/>',
+  'split-right': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="10" y="4" width="6" height="11" rx="2" fill="currentColor" stroke="none"/>',
+  'split-left': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="3" y="4" width="6" height="11" rx="2" fill="currentColor" stroke="none"/>',
+  'split-down': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="3" y="10" width="13" height="5" rx="2" fill="currentColor" stroke="none"/>',
+  'split-up': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="3" y="4" width="13" height="5" rx="2" fill="currentColor" stroke="none"/>'
+};
+const svgIcon = (name) =>
+  '<svg class="pane-menu-icon" viewBox="0 0 19 19" fill="none" stroke="currentColor" stroke-width="1.4">' +
+  (MENU_ICONS[name] || '') + '</svg>';
+
+let paneMenuEl = null;
+function hidePaneMenu() {
+  if (paneMenuEl) { paneMenuEl.remove(); paneMenuEl = null; }
+}
+function showPaneMenu(x, y, pane) {
+  hidePaneMenu();
+  const hasSel = !!(pane.term.getSelection());
+  const items = [];
+  if (hasSel) items.push({ label: 'Copy', icon: 'copy', action: () => copyPane(pane) });
+  items.push({ label: 'Paste', icon: 'paste', action: () => pastePane(pane) });
+  items.push({ sep: true });
+  items.push({ label: 'Split Right', icon: 'split-right', action: () => splitActive('row', false) });
+  items.push({ label: 'Split Left', icon: 'split-left', action: () => splitActive('row', true) });
+  items.push({ label: 'Split Down', icon: 'split-down', action: () => splitActive('col', false) });
+  items.push({ label: 'Split Up', icon: 'split-up', action: () => splitActive('col', true) });
+
+  const menu = document.createElement('div');
+  menu.className = 'pane-menu';
+  for (const it of items) {
+    if (it.sep) {
+      const s = document.createElement('div');
+      s.className = 'pane-menu-sep';
+      menu.appendChild(s);
+      continue;
+    }
+    const row = document.createElement('div');
+    row.className = 'pane-menu-item';
+    row.innerHTML = svgIcon(it.icon) + '<span>' + it.label + '</span>';
+    row.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      hidePaneMenu();
+      it.action();
+    });
+    menu.appendChild(row);
+  }
+  document.body.appendChild(menu);
+  paneMenuEl = menu;
+
+  // Keep the menu inside the viewport.
+  const r = menu.getBoundingClientRect();
+  const px = Math.min(x, window.innerWidth - r.width - 4);
+  const py = Math.min(y, window.innerHeight - r.height - 4);
+  menu.style.left = Math.max(4, px) + 'px';
+  menu.style.top = Math.max(4, py) + 'px';
+}
+// Dismiss on any outside click, scroll, resize, or Escape.
+window.addEventListener('mousedown', () => hidePaneMenu());
+window.addEventListener('blur', () => hidePaneMenu());
+window.addEventListener('resize', () => hidePaneMenu());
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') hidePaneMenu(); });
 
 ipcRenderer.on('new-tab', () => newTab());
 ipcRenderer.on('open-folder', (event, { path }) => newTab(path));

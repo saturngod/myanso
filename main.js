@@ -422,17 +422,21 @@ function buildMenu() {
   const viewMenu = {
     label: 'View',
     submenu: [
-      { role: 'reload' },
-      { role: 'forceReload' },
-      { role: 'toggleDevTools' },
-      { type: 'separator' },
+      // Reload / forceReload / DevTools only in development (npm start); hidden in the packaged build.
+      ...(app.isPackaged ? [] : [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+      ]),
       { label: 'Increase Font Size', accelerator: 'CmdOrCtrl+Plus', click: send('font-inc') },
       // Also bind Cmd+= (the unshifted key) to the same action; hidden so the menu shows one entry.
       { label: 'Increase Font Size', accelerator: 'CmdOrCtrl+=', click: send('font-inc'), visible: false },
       { label: 'Decrease Font Size', accelerator: 'CmdOrCtrl+-', click: send('font-dec') },
       { label: 'Reset Font Size', accelerator: 'CmdOrCtrl+0', click: send('font-reset') },
-      { type: 'separator' },
-      { role: 'togglefullscreen' }
+      // macOS auto-adds its own "Toggle Full Screen" (Globe+F) to the View menu,
+      // so add ours only on non-mac to avoid a duplicate entry.
+      ...(isMac ? [] : [{ type: 'separator' }, { role: 'togglefullscreen' }])
     ]
   };
 
