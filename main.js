@@ -177,6 +177,14 @@ function createWindow(pos, initialDir) {
     }
   });
 
+  // The settings panel lists the system's installed monospaced fonts via the
+  // Local Font Access API (window.queryLocalFonts), which needs the
+  // 'local-fonts' permission. Grant it for our own renderer.
+  win.webContents.session.setPermissionRequestHandler((wc, perm, cb) => {
+    cb(perm === 'local-fonts');
+  });
+  win.webContents.session.setPermissionCheckHandler((wc, perm) => perm === 'local-fonts');
+
   win.loadFile('index.html');
 
   // Chromium persists per-window page zoom. A stray Cmd+- (old zoom binding)

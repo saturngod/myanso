@@ -1417,10 +1417,76 @@ sizeInput.addEventListener('input', () => {
 });
 spacingSel.addEventListener('change', () => edit({ spacing: spacingSel.value }));
 
+// --- System monospaced fonts ------------------------------------------------
+// Populate the Font dropdown from the fonts actually installed on this machine
+// (via the Local Font Access API), keeping only monospaced families. Falls back
+// to the built-in FONTS list when unsupported / denied / no user gesture.
+let systemFontsLoaded = false;
+let measureCtx = null;
+
+// A family is monospaced when narrow and wide glyphs render at the same width.
+function isMonospaceFamily(family) {
+  if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+  const ctx = measureCtx;
+  ctx.font = `48px "${family.replace(/"/g, '')}"`;
+  const w = (ch) => ctx.measureText(ch).width;
+  const widths = [w('i'), w('l'), w('W'), w('m'), w('@')];
+  const max = Math.max(...widths), min = Math.min(...widths);
+  return max > 0 && (max - min) < 0.5;
+}
+
+// Map a saved built-in key (e.g. 'menlo') to the matching system family name
+// now that the dropdown lists real families.
+function migrateFontKey(key, families) {
+  if (key === 'custom') return 'custom';
+  if (families.includes(key)) return key;
+  const f = FONTS[key];
+  if (f && families.includes(f.name)) return f.name;
+  return families.length ? families[0] : key;
+}
+
+function rebuildFontOptions(families) {
+  // Register each family so fontFamilyFor() resolves it (Myanmar fallback added
+  // there, same as the built-ins).
+  for (const fam of families) FONTS[fam] = { name: fam, family: `"${fam}"` };
+  fontSel.innerHTML = '';
+  for (const fam of families) {
+    const o = document.createElement('option');
+    o.value = fam;
+    o.textContent = fam;
+    fontSel.appendChild(o);
+  }
+  const co = document.createElement('option');
+  co.value = 'custom';
+  co.textContent = 'Custom…';
+  fontSel.appendChild(co);
+}
+
+async function loadSystemFonts() {
+  if (systemFontsLoaded) return;
+  if (typeof window.queryLocalFonts !== 'function') return; // unsupported
+  let fonts;
+  try {
+    fonts = await window.queryLocalFonts();
+  } catch (e) {
+    return; // denied or no user gesture — keep the built-in list
+  }
+  const families = [...new Set(fonts.map((f) => f.family))]
+    .filter(isMonospaceFamily)
+    .sort((a, b) => a.localeCompare(b));
+  if (!families.length) return;
+  systemFontsLoaded = true;
+  rebuildFontOptions(families);
+  // Reflect the (possibly migrated) selection in the now-rebuilt dropdown.
+  draft = Object.assign({}, draft, { font: migrateFontKey(draft.font, families) });
+  syncControls();
+}
+
 function openSettings() {
   draft = Object.assign({}, settings); // start from the active settings
   syncControls();
   overlay.classList.add('open');
+  loadSystemFonts(); // lazily replace built-ins with installed monospaced fonts
 }
 function applyAndClose() {
   settings = Object.assign({}, draft);
