@@ -138,6 +138,14 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
   }
   ptys.set(id, { proc: p, ownerWinId });
   p.on('data', (data) => {
+    // Strip synchronized-output markers (DEC mode 2026 set/reset). xterm.js 6 has
+    // a bug: when a Myanmar combining mark joins an existing cell *inside* a 2026
+    // sync block, the deferred render goes stale and the mark never appears — so
+    // TUIs that wrap each keystroke echo in 2026 (e.g. agy) drop ◌ာ / ◌း while
+    // typing (paste, which isn't per-char-wrapped, is fine). Removing the markers
+    // turns those into plain writes, which render correctly; the only cost is the
+    // app's per-frame flicker batching, which our rAF-debounced renderer covers.
+    data = data.replace(/\x1b\[\?2026[hl]/g, '');
     // Batch pty output per main-process tick. Under heavy output (cat largefile,
     // build logs) a pty emits many small chunks; one IPC message + one term.write
     // per chunk is the real cost. Coalesce chunks that arrive in the same tick and

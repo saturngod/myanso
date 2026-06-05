@@ -499,11 +499,15 @@ function fontFamilyFor(s) {
 }
 
 // --- Per-screen Myanmar mark width -----------------------------------------
-// zsh's line editor counts Myanmar combining/vowel marks as width 0, but TUIs
-// (vim, Claude Code) and xterm's default count them as 1. One fixed width breaks
-// one side: width 1 doubles shell editing (မြန → မမြန), width 0 misaligns TUIs.
-// So we switch per screen: width 0 on the normal screen (shell), width 1 on the
-// alt screen (TUI). Ranges mirror MARK() in patches/patch-xterm-myanmar.js.
+// macOS's wcwidth (used by zsh's line editor on the normal screen) counts ALL
+// Myanmar combining/vowel marks as width 0; modern TUIs (vim, Claude Code, agy)
+// and iTerm2 use the Unicode-standard width: *non-spacing* marks (Mn: ◌ိ ◌ု ◌်…)
+// = 0, but *spacing* marks (Mc: ◌ာ ◌း ◌ြ ◌ေ…) = 1. One fixed width breaks one
+// side, so we switch per screen:
+//   normal screen → 'myan-shell' (all marks 0) to match zsh.
+//   alt screen    → 'myan-std' (standard Mn=0 / Mc=1) to match the TUIs.
+// isMyanmarMark = the full mark range (used for the all-0 shell provider and to
+// mirror MARK() in the xterm patch). isMyanmarNonspacing = just the Mn subset.
 function isMyanmarMark(c) {
   return (c >= 0x102b && c <= 0x103e) || (c >= 0x1056 && c <= 0x1059) ||
          (c >= 0x105e && c <= 0x1060) || (c >= 0x1062 && c <= 0x1064) ||
@@ -512,12 +516,32 @@ function isMyanmarMark(c) {
          (c >= 0x109a && c <= 0x109d);
 }
 
+// Myanmar non-spacing marks (general category Mn) — width 0 in standard wcwidth.
+// Everything else in the Myanmar block (incl. spacing marks Mc like ◌ာ ◌း ◌ြ) is
+// width 1. NOTE: xterm's stock '6' table gets several of these wrong (it gives
+// the asat ◌် U+103A, the medials ◌ွ ◌ှ, and others width 1), which desyncs every
+// ◌်-ending syllable — hence this explicit Mn list instead of trusting base.
+function isMyanmarNonspacing(c) {
+  return (c >= 0x102d && c <= 0x1030) || (c >= 0x1032 && c <= 0x1037) ||
+         c === 0x1039 || c === 0x103a || c === 0x103d || c === 0x103e ||
+         (c >= 0x1058 && c <= 0x1059) || (c >= 0x105e && c <= 0x1060) ||
+         (c >= 0x1071 && c <= 0x1074) || c === 0x1082 ||
+         (c >= 0x1085 && c <= 0x1086) || c === 0x108d || c === 0x109d;
+}
+
+// Pack a width into xterm's charProperties value, joining a width-0 mark onto the
+// preceding cell (so it shapes as one cluster). Mirrors xterm's default packing.
+function packMyanProps(width, preceding) {
+  let join = width === 0 && preceding !== 0;
+  if (join) {
+    const w = (preceding >> 1) & 3;            // extractWidth(preceding)
+    if (w === 0) join = false;
+    else if (w > width) width = w;
+  }
+  return ((width & 3) << 1) | (join ? 1 : 0);
+}
+
 function setupMarkWidth(term) {
-  // We register two providers and switch per screen:
-  //   'myan-shell' (normal screen) — marks width 0, so they join the base cell;
-  //     zsh's line editor counts them as 0, so editing stays aligned.
-  //   'myan-alt'   (alt screen)    — marks width 1, matching TUIs (vim, Claude
-  //     Code), so column counts agree and no spurious gaps appear.
   let base;
   try {
     // PRIVATE API: reaches into xterm's _core to wrap the active width provider.
@@ -530,39 +554,26 @@ function setupMarkWidth(term) {
   }
   if (!base) return;
 
+  // Normal screen (zsh): every Myanmar mark width 0, joined onto the base.
   term.unicode.register({
     version: 'myan-shell',
     wcwidth: (c) => (isMyanmarMark(c) ? 0 : base.wcwidth(c)),
-    // Same packing as xterm's default charProperties, but marks are width 0 so
-    // they join the preceding (base) cell as a combining character.
-    charProperties: (c, preceding) => {
-      let width = isMyanmarMark(c) ? 0 : base.wcwidth(c);
-      let join = width === 0 && preceding !== 0;
-      if (join) {
-        const w = (preceding >> 1) & 3;       // extractWidth(preceding)
-        if (w === 0) join = false;
-        else if (w > width) width = w;
-      }
-      return ((width & 3) << 1) | (join ? 1 : 0);
-    }
+    charProperties: (c, preceding) =>
+      packMyanProps(isMyanmarMark(c) ? 0 : base.wcwidth(c), preceding),
   });
 
-  // Alt screen: force EVERY Myanmar mark to width 1. xterm's stock '6' provider
-  // only makes *spacing* marks (◌ာ ◌း) width 1 and still gives *non-spacing*
-  // marks (◌ိ ◌ီ ◌ု ◌ူ ◌ဲ ◌ံ ◌့ ◌်) width 0 — which is one column narrower
-  // than what TUIs like Claude Code reserve, so the next glyph is shifted and a
-  // gap appears (ကူ → "ကူ ", ဘူး → "ဘူ း"). Width 1 keeps the terminal in sync;
-  // the shaping patch still collapses the cluster's cells into one span.
+  // Alt screen (TUIs): standard widths — non-spacing marks 0 (joined), spacing
+  // marks 1. Matches iTerm2 and the apps' own wcwidth, so column counts agree.
   term.unicode.register({
-    version: 'myan-alt',
-    wcwidth: (c) => (isMyanmarMark(c) ? 1 : base.wcwidth(c)),
+    version: 'myan-std',
+    wcwidth: (c) => (isMyanmarNonspacing(c) ? 0 : base.wcwidth(c)),
     charProperties: (c, preceding) =>
-      isMyanmarMark(c) ? ((1 << 1) | 0)        // width 1, never join
-                       : base.charProperties(c, preceding),
+      packMyanProps(isMyanmarNonspacing(c) ? 0 : base.wcwidth(c), preceding),
   });
 
   const apply = () => {
-    term.unicode.activeVersion = term.buffer.active.type === 'alternate' ? 'myan-alt' : 'myan-shell';
+    term.unicode.activeVersion =
+      term.buffer.active.type === 'alternate' ? 'myan-std' : 'myan-shell';
   };
   term.buffer.onBufferChange(apply);
   apply();
