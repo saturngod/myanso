@@ -80,7 +80,14 @@ rAF-debounced renderer already batches frames, so there's no flicker cost.
 
 - **vim `'maxcombine'`** defaults to **2** — it only *draws* 2 combining marks
   per base, so a 3-mark syllable like `တို့` shows as `တို` (the file is still
-  correct). Fix it in vim: `set maxcombine=6`.
+  correct). Fix it permanently by adding `set maxcombine=6` to your `~/.vimrc`:
+
+  ```bash
+  vi ~/.vimrc
+  ```
+  ```vim
+  set maxcombine=6
+  ```
 - Column alignment of wide/proportional glyphs can drift slightly — the
   deliberate trade-off for correct shaping.
 
