@@ -10,7 +10,7 @@ the font can never shape it.
 Myanso is a normal PTY terminal — tabs, split panes, multiple windows, search,
 clickable links — built on **Electron** + **xterm.js 6**. Its one special trick
 is getting Myanmar shaping *and* column alignment right across the shell, full
-‑screen TUIs (vim), and AI CLIs (Claude Code, agy).
+‑screen TUIs (vim), and AI CLIs (Claude Code, Codex CLI, agy).
 
 > Goal: **correct Myanmar text over perfect monospace alignment.** Where the two
 > conflict, Myanso favors readable text.
@@ -21,7 +21,7 @@ is getting Myanmar shaping *and* column alignment right across the shell, full
   shape as one unit instead of breaking into `မ ြ န ်`.
 - **Per-app width handling** — different programs disagree on how wide a Myanmar
   mark is; Myanso detects the foreground app and matches it, so the cursor and
-  columns stay aligned in zsh, vim, agy, and Claude Code (see below).
+  columns stay aligned in zsh, vim, agy, Claude Code, and Codex CLI (see below).
 - **Tabs & split panes** — split any pane right/down into a binary tree, with
   draggable dividers.
 - **Multiple windows** — `Cmd+N`, and you can **drag a tab between windows** (or
@@ -60,13 +60,17 @@ and switches between them based on the screen and the foreground process:
 | Provider | Marks | Used for |
 |---|---|---|
 | `myan-shell` | all marks width **0** (joined onto the base) | zsh / shell (macOS `wcwidth` counts marks as 0) |
-| `myan-std` | non-spacing (Mn) **0**, spacing (Mc, e.g. `ာ း ြ`) **1** | vim, agy, iTerm2 — the Unicode standard |
+| `myan-std` | non-spacing (Mn) **0**, spacing (Mc, e.g. `ာ း ြ`) **1** | vim, agy, iTerm2, Codex CLI — the Unicode standard |
 | `myan-allone` | every mark width **1** (own cell) | Claude Code (it counts all marks as 1) |
 
 The main process polls each PTY's foreground process (`node-pty`'s `.process`)
 and tells the renderer; the renderer picks the provider. Claude Code is detected
 by its terminal title (`Claude Code`) or its version-string process title (e.g.
-`2.1.165`), with a guard so a stale title doesn't stick after it exits.
+`2.1.165`), with a guard so a stale title doesn't stick after it exits. Codex CLI
+reports a generic `node` process, so the main process resolves it to the full
+command line (`pgrep` + `ps`) to spot `codex`; it uses the standard widths but
+runs on the **normal** screen, so it's forced to `myan-std` there (otherwise
+spacing marks would be dropped: `မြန်မာ` → `မြန်မ`).
 
 ### 3. Synchronized output
 
@@ -125,7 +129,7 @@ npm run dist         # build a distributable (DMG / NSIS / AppImage)
 ```
 
 There are no tests or linter — verification is manual: type and paste Myanmar
-text in the shell, in vim, and in a TUI like Claude Code or agy.
+text in the shell, in vim, and in a TUI like Claude Code, Codex CLI, or agy.
 
 ## Install
 
