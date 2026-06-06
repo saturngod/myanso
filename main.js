@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, Menu, screen, nativeImage } = require('elec
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { execSync } = require('child_process');
 const pty = require('node-pty');
 
 // On Windows prefer PowerShell 7 (pwsh) if installed — it has better Unicode
@@ -121,13 +122,33 @@ function flushPtyBuffers() {
 // app. node-pty exposes the tty's current foreground process via `.process`; poll
 // it and tell the owner window when it changes. Set MYAN_DEBUG_PROC=1 to log the
 // reported names (useful when adding an app to the width lists in renderer.js).
+function resolveNodeCmd(shellPid) {
+  try {
+    // Find the full command of the node process that is a child of the shell.
+    const out = execSync(
+      `ps -o pid=,command= -p $(pgrep -P ${shellPid} node 2>/dev/null | tail -1) 2>/dev/null`,
+      { shell: '/bin/sh', timeout: 500 }
+    ).toString().trim();
+    if (process.env.MYAN_DEBUG_PROC) console.log('[myan] node cmd:', JSON.stringify(out));
+    return out;
+  } catch (e) { return ''; }
+}
+
 function pollPtyProcesses() {
   for (const [id, rec] of ptys) {
-    let name = '';
-    try { name = (rec.proc.process || '').toString(); } catch (e) { /* dead pty */ }
-    if (name === rec.lastProcess) continue;
-    rec.lastProcess = name;
+    let raw = '';
+    try { raw = (rec.proc.process || '').toString(); } catch (e) { /* dead pty */ }
+    // Skip expensive resolution if the raw name hasn't changed.
+    if (raw === rec.lastRaw) continue;
+    rec.lastRaw = raw;
+    let name = raw;
+    // When foreground is "node", resolve full command to distinguish apps like codex.
+    if (raw === 'node') {
+      const cmd = resolveNodeCmd(rec.proc.pid);
+      if (cmd) name = 'node:' + cmd;
+    }
     if (process.env.MYAN_DEBUG_PROC) console.log('[myan] pty', id, 'foreground:', JSON.stringify(name));
+    rec.lastProcess = name;
     const w = ownerWindow(id);
     if (w) w.webContents.send('pty-process', { id, name });
   }
