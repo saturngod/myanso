@@ -62,14 +62,17 @@ linux:
     - rpm
 
 deb:
+  # Ubuntu 24.04 / Debian trixie renamed some libs for the 64-bit time_t
+  # transition (libgtk-3-0 -> libgtk-3-0t64, libatspi2.0-0 -> ...t64).
+  # Use "old | new" alternatives so the deb installs on both old and new.
   depends:
-    - libgtk-3-0
+    - libgtk-3-0 | libgtk-3-0t64
     - libnotify4
     - libnss3
     - libxss1
     - libxtst6
     - xdg-utils
-    - libatspi2.0-0
+    - libatspi2.0-0 | libatspi2.0-0t64
     - libsecret-1-0
 
 rpm:
