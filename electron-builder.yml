@@ -48,7 +48,10 @@ win:
   target: nsis
 
 linux:
-  icon: icon.png
+  # A directory of sized PNGs (16x16…1024x1024) so the deb/rpm install
+  # hicolor icons the desktop menu can find. A single PNG often leaves
+  # the .deb with no menu icon.
+  icon: build/icons
   category: Development
   synopsis: Myanmar-aware terminal emulator
   description: Desktop terminal emulator with first-class support for Myanmar (Burmese) Unicode text rendering, tabs, and split panes.
