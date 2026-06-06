@@ -14,15 +14,15 @@
     "dist": "node patches/patch-xterm-myanmar.js && electron-builder --config electron-builder.yml"
   },
   "devDependencies": {
-    "@electron/rebuild": "^3.7.0",
+    "@electron/rebuild": "^4.0.4",
     "electron": "42.3.3",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^26.5.0"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/xterm": "^6.0.0",
-    "node-pty": "^1.0.0"
+    "node-pty": "^1.1.0"
   }
 }
