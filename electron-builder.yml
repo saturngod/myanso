@@ -41,10 +41,11 @@ dmg:
   title: Myanso ${version}
 
 win:
-  # PNG works (electron-builder converts on the fly) but produces a fuzzy
-  # icon. For a crisp taskbar/installer icon, generate a multi-size ICO
-  # at build/icon.ico and change this path to "build/icon.ico".
-  icon: icon.png
+  # Multi-size ICO (16…256px) built from build/icons/ via ImageMagick for a
+  # crisp taskbar/installer icon. Regenerate with:
+  #   magick build/icons/16x16.png build/icons/32x32.png build/icons/48x48.png \
+  #     build/icons/64x64.png build/icons/128x128.png build/icons/256x256.png build/icon.ico
+  icon: build/icon.ico
   target: nsis
 
 linux:
