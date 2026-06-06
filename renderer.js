@@ -576,14 +576,17 @@ function setupMarkWidth(term) {
   provider('myan-allone', isMyanmarMark, 1);         // all marks 1, own cell (Claude Code)
 
   // Width depends on the foreground app AND the screen:
-  //   Claude Code (any screen) → all marks width 1 ('myan-allone').
-  //   alt screen (vim, …)      → standard ('myan-std').
-  //   normal screen (zsh, agy) → all marks width 0, joined ('myan-shell').
-  // term._myanForceAllOne is set by the pty-process IPC handler.
+  //   Claude Code (any screen)  → all marks width 1 ('myan-allone').
+  //   Codex CLI (any screen)    → Mn=0, Mc=1 ('myan-std'), even on normal screen.
+  //   alt screen (vim, agy, …)  → standard ('myan-std').
+  //   normal screen (zsh, …)    → all marks width 0, joined ('myan-shell').
+  // term._myanForceAllOne / term._myanForceStd set by the pty-process IPC handler.
   const apply = () => {
     term.unicode.activeVersion = term._myanForceAllOne
       ? 'myan-allone'
-      : (term.buffer.active.type === 'alternate' ? 'myan-std' : 'myan-shell');
+      : (term._myanForceStd || term.buffer.active.type === 'alternate')
+        ? 'myan-std'
+        : 'myan-shell';
   };
   term._applyMyanWidth = apply;   // let the pty-process handler re-apply on app change
   term.buffer.onBufferChange(apply);
@@ -598,8 +601,9 @@ function setupMarkWidth(term) {
 //      sets process.title to the version), or "claude".
 // A plain shell in the foreground means no TUI is running, so we never force then
 // — this also stops a *stale* "Claude Code" title from sticking after you quit it.
-const ALL_ONE_NAMES = ['claude'];          // foreground process name substrings
-const ALL_ONE_TITLE = /claude/i;           // OSC terminal title
+const ALL_ONE_NAMES = ['claude'];           // foreground process name substrings → myan-allone
+const ALL_ONE_TITLE = /claude/i;           // OSC terminal title → myan-allone
+const STD_MODE_NAMES = ['codex'];          // foreground process names → myan-std even on normal screen
 const SEMVER_FG = /^\d+\.\d+\.\d+/;        // Claude Code's process.title (version)
 const SHELL_FG = /^-?(zsh|bash|fish|dash|sh|ksh|tcsh|csh)$/;
 
@@ -610,13 +614,21 @@ function paneWantsAllOne(pane) {
   return ALL_ONE_TITLE.test(pane.title || '');         // fall back to the app's title
 }
 
+function paneWantsStd(pane) {
+  const fg = (pane._fgProcess || '').toLowerCase();
+  if (fg === '' || SHELL_FG.test(fg)) return false;
+  return STD_MODE_NAMES.some((a) => fg.includes(a));
+}
+
 function updatePaneMarkWidth(pane) {
   if (!pane) return;
   const term = pane.term;
   if (!term || !term._applyMyanWidth) return;           // mountPane will re-apply later
-  const force = paneWantsAllOne(pane);
-  if (term._myanForceAllOne === force) return;          // no change
-  term._myanForceAllOne = force;
+  const allOne = paneWantsAllOne(pane);
+  const std = !allOne && paneWantsStd(pane);
+  if (term._myanForceAllOne === allOne && term._myanForceStd === std) return;
+  term._myanForceAllOne = allOne;
+  term._myanForceStd = std;
   term._applyMyanWidth();
 }
 
