@@ -56,6 +56,13 @@ linux:
   category: Development
   synopsis: Myanmar-aware terminal emulator
   description: Desktop terminal emulator with first-class support for Myanmar (Burmese) Unicode text rendering, tabs, and split panes.
+  # Declare that Myanso handles folders so file managers (Nautilus/Files etc.)
+  # offer "Open with Myanso" on a directory. electron-builder's default Exec
+  # already ends with %U, so the selected folder path is passed on the command
+  # line; main.js's getDirFromArgv() opens the first tab there.
+  desktop:
+    entry:
+      MimeType: inode/directory;
   target:
     - AppImage
     - deb
