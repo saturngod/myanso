@@ -78,16 +78,55 @@ function resolveDropDir(p) {
 // would race the renderer's load and get dropped, leaving a stray home tab.
 let pendingOpenDir = null;
 
+// Linux/Windows have no `open-file` event: a folder opened via the file manager's
+// "Open with" (or `myanso /path`) arrives as a command-line argument instead.
+// Scan argv from the end for the last token that points at an existing path,
+// skipping flags and the dev app-path '.'. A file resolves to its parent dir.
+function getDirFromArgv(argv) {
+  for (let i = argv.length - 1; i >= 1; i--) {
+    const a = argv[i];
+    if (!a || a.startsWith('-') || a === '.') continue;
+    try { fs.statSync(a); return resolveDropDir(a); } catch (_) {}
+  }
+  return null;
+}
+
+// Open a folder in the running app: a new tab of the focused window, or a fresh
+// window if none are open. Shared by `open-file` (macOS) and `second-instance`.
+function openFolderInRunningApp(dir) {
+  const win = BrowserWindow.getFocusedWindow() ||
+    BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    win.webContents.send('open-folder', { path: dir });
+  } else {
+    createWindow(undefined, dir);
+  }
+}
+
+// Single-instance: when the app is already running and the user opens another
+// folder via "Open with", a SECOND process launches and fires `second-instance`
+// in the PRIMARY one with the new process's argv. Route that folder to the
+// existing window instead of leaving two processes (and two dock/taskbar icons).
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', (_e, argv) => {
+    const dir = getDirFromArgv(argv);
+    if (dir) openFolderInRunningApp(dir);
+    else {
+      const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+      if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+    }
+  });
+}
+
 app.on('open-file', (event, p) => {
   event.preventDefault();
   const dir = resolveDropDir(p);
   if (!app.isReady()) { pendingOpenDir = dir; return; }
-  // App already running: open the folder in a new tab of the focused window.
-  const win = BrowserWindow.getFocusedWindow() ||
-    BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
-  if (win) { win.webContents.send('open-folder', { path: dir }); return; }
-  // Running but all windows closed (macOS) — open a fresh window in that folder.
-  createWindow(undefined, dir);
+  openFolderInRunningApp(dir);
 });
 
 // The app is multi-window. ptys live here in the main process (one per pane) and
@@ -557,7 +596,10 @@ function buildMenu() {
 app.on('ready', () => {
   setupIpc();
   buildMenu();
-  createWindow(undefined, pendingOpenDir);  // pendingOpenDir set if launched by a dock folder drop
+  // First tab opens in: a folder dropped on the dock (macOS open-file, cold
+  // start) OR a folder passed on the command line (Linux/Windows "Open with").
+  const startDir = pendingOpenDir || getDirFromArgv(process.argv);
+  createWindow(undefined, startDir);
   pendingOpenDir = null;
 });
 
