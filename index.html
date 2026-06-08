@@ -102,8 +102,11 @@
       max-width: 200px;
     }
 
-    /* Let the title truncate with … instead of forcing the tab wider. */
+    /* Let the title truncate with … instead of forcing the tab wider, and grow to
+       fill the tab so the close button stays pinned to the right edge even when the
+       title is short (the tab has a 72px min-width). */
     .tab > span:first-child {
+      flex: 1 1 auto;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
