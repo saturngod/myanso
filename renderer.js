@@ -14,6 +14,14 @@ const WID = (process.argv.find((a) => a.startsWith('--myanso-wid=')) || '').spli
 ipcRenderer.send('renderer-ready');
 
 const IS_WIN = process.platform === 'win32';
+const IS_LINUX = process.platform === 'linux';
+// Linux's glibc wcwidth counts spacing marks (Mc, e.g. ◌ာ U+102C) as width 1,
+// whereas macOS counts them 0. The shell line editor (bash/readline) uses libc
+// wcwidth for cursor math, so on Linux the normal-screen default must be 'myan-std'
+// (Mn 0, Mc 1) — using 'myan-shell' (all marks 0) desyncs readline from the
+// terminal and mid-line edits then clobber the marks (မြန်မာ → မနမ). macOS keeps
+// 'myan-shell' to match its zero-width spacing marks.
+const NORMAL_SCREEN_VERSION = IS_LINUX ? 'myan-std' : 'myan-shell';
 
 // Quote a file path for the current shell so it can be pasted safely.
 // PowerShell uses single quotes with '' for embedded single quotes;
@@ -692,14 +700,15 @@ function setupMarkWidth(term) {
   //   Claude Code (any screen)  → all marks width 1 ('myan-allone').
   //   Codex CLI (any screen)    → Mn=0, Mc=1 ('myan-std'), even on normal screen.
   //   alt screen (vim, agy, …)  → standard ('myan-std').
-  //   normal screen (zsh, …)    → all marks width 0, joined ('myan-shell').
+  //   normal screen (zsh, …)    → all marks 0 ('myan-shell') on macOS, but
+  //                               'myan-std' (Mc=1) on Linux to match glibc wcwidth.
   // term._myanForceAllOne / term._myanForceStd set by the pty-process IPC handler.
   const apply = () => {
     term.unicode.activeVersion = term._myanForceAllOne
       ? 'myan-allone'
       : (term._myanForceStd || term.buffer.active.type === 'alternate')
         ? 'myan-std'
-        : 'myan-shell';
+        : NORMAL_SCREEN_VERSION;
   };
   term._applyMyanWidth = apply;   // let the pty-process handler re-apply on app change
   term.buffer.onBufferChange(apply);

@@ -7,7 +7,7 @@
   "author": "saturngod",
   "license": "MIT",
   "scripts": {
-    "start": "electron .",
+    "start": "electron . --no-sandbox",
     "rebuild": "electron-rebuild -f -w node-pty",
     "patch-xterm": "node patches/patch-xterm-myanmar.js",
     "postinstall": "electron-rebuild -f -w node-pty && node patches/patch-xterm-myanmar.js",

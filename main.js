@@ -218,7 +218,7 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
       return;
     }
   }
-  ptys.set(id, { proc: p, ownerWinId, lastProcess: '' });
+  ptys.set(id, { proc: p, ownerWinId, lastProcess: '', syncCarry: '' });
   p.on('data', (data) => {
     // Strip synchronized-output markers (DEC mode 2026 set/reset). xterm.js 6 has
     // a bug: when a Myanmar combining mark joins an existing cell *inside* a 2026
@@ -227,7 +227,21 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
     // typing (paste, which isn't per-char-wrapped, is fine). Removing the markers
     // turns those into plain writes, which render correctly; the only cost is the
     // app's per-frame flicker batching, which our rAF-debounced renderer covers.
+    // A pty can split this 8-byte sequence across two chunks; if the SET marker's
+    // first half slips through, xterm enters sync mode and STOPS painting (every
+    // later render is buffered, never drawn). So carry a trailing partial of
+    // `\e[?2026h/l` over to the next chunk before stripping.
+    const rec = ptys.get(id);
+    data = (rec ? rec.syncCarry : '') + data;
+    if (rec) rec.syncCarry = '';
     data = data.replace(/\x1b\[\?2026[hl]/g, '');
+    // Hold back a trailing fragment that could be the start of a 2026 sequence
+    // (at least `\e[?2`, so ordinary CSI/color codes aren't delayed a chunk).
+    const partial = data.match(/\x1b\[\?2(?:0(?:2(?:6)?)?)?$/);
+    if (partial && rec) {
+      rec.syncCarry = data.slice(partial.index);
+      data = data.slice(0, partial.index);
+    }
     // Batch pty output per main-process tick. Under heavy output (cat largefile,
     // build logs) a pty emits many small chunks; one IPC message + one term.write
     // per chunk is the real cost. Coalesce chunks that arrive in the same tick and

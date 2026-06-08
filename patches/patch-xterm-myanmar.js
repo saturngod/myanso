@@ -66,6 +66,28 @@ const targets = [
     find: 'A&&(N&&Pe||!N&&!Pe&&x.bg===I)&&(N&&Pe&&p.selectionForeground||x.fg===k)&&x.extended.ext===P&&te===oe&&Ke===Me',
     replace: 'A&&(' + MARK('ze') + '||(N&&Pe||!N&&!Pe&&x.bg===I)&&(N&&Pe&&p.selectionForeground||x.fg===k)&&x.extended.ext===P&&te===oe)&&Ke===Me',
   },
+  // 3) Render a STANDALONE width-0 Myanmar mark instead of dropping it. The DOM
+  //    row factory skips every width-0 cell (`if(width===0)continue`) — fine for
+  //    real combining marks, which xterm stores INSIDE their base cell. But a mark
+  //    only gets folded into its base when xterm's `precedingJoinState` points at
+  //    that base. bash/readline redraws a line being edited mid-line (e.g. inside
+  //    "") as `<char>"<backspace>` per keystroke, and the backspace (a C0 control)
+  //    RESETS precedingJoinState to 0 — so the next keystroke's mark (◌် ◌ိ …) is
+  //    written as its OWN width-0 cell, which the row factory then skips. The text
+  //    is still in the buffer (copy/selection show it), but the screen drops it.
+  //    Fix: when a skipped width-0 cell holds a Myanmar mark, append its glyph to
+  //    the current span so it shapes onto the preceding base. (Selection column
+  //    mapping for that mark is approximate — same "correct text first" trade-off.)
+  {
+    name: 'xterm.js',
+    find: 'e.loadCell(x,this._workCell);let C=this._workCell.getWidth();if(0===C)continue;',
+    replace: 'e.loadCell(x,this._workCell);let C=this._workCell.getWidth();if(0===C){if(b&&y>0){var _mc=this._workCell.getChars();_mc&&(' + MARK('_mc') + ')&&(w+=_mc);}continue;}',
+  },
+  {
+    name: 'xterm.mjs',
+    find: 't.loadCell(y,this._workCell);let T=this._workCell.getWidth();if(T===0)continue;',
+    replace: 't.loadCell(y,this._workCell);let T=this._workCell.getWidth();if(T===0){if(f&&A>0){var _mc=this._workCell.getChars();_mc&&(' + MARK('_mc') + ')&&(R+=_mc);}continue;}',
+  },
 ];
 
 let ok = 0;
