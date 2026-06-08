@@ -131,6 +131,48 @@ const THEME_LIST = [
     },
   },
   {
+    id: "myanso-beige",
+    label: "Myanso Beige",
+    colorScheme: "light",
+    foreground: "#48401B",
+    background: "#F6F3E6",
+    cursor: "#48401B",
+    cursorAccent: "#F6F3E6",
+    selectionBackground: "rgba(90, 125, 196, 0.25)",
+    selectionInactiveBackground: "rgba(90, 125, 196, 0.14)",
+    ansi: [
+      "#4F4D46", "#C4614A", "#7A9A3C", "#B89A30",
+      "#5A7DC4", "#9A6EBF", "#3D90A8", "#C8C4A8",
+      "#7A7868", "#D9785E", "#96B84A", "#D4B240",
+      "#7296D8", "#B588D4", "#4AAFC8", "#F6F3E6",
+    ],
+    ui: generatedUi({
+      colorScheme: "light", foreground: "#48401B", background: "#F6F3E6",
+      muted: "#8A8575", accent: "#5A7DC4", border: "#B89A30",
+    }),
+  },
+  {
+    id: "myanso-beige-night",
+    label: "Myanso Beige Night",
+    colorScheme: "dark",
+    foreground: "#D4CFA8",
+    background: "#1C1A14",
+    cursor: "#C4614A",
+    cursorAccent: "#1C1A14",
+    selectionBackground: "rgba(90, 125, 196, 0.35)",
+    selectionInactiveBackground: "rgba(90, 125, 196, 0.20)",
+    ansi: [
+      "#2E2C22", "#C4614A", "#7A9A3C", "#B89A30",
+      "#5A7DC4", "#9A6EBF", "#3D90A8", "#B8B49A",
+      "#6B6650", "#D9785E", "#96B84A", "#D4B240",
+      "#7296D8", "#B588D4", "#4AAFC8", "#D4CFA8",
+    ],
+    ui: generatedUi({
+      colorScheme: "dark", foreground: "#D4CFA8", background: "#1C1A14",
+      muted: "#6B6650", accent: "#7296D8", border: "#4F4D46",
+    }),
+  },
+  {
     id: "solarized-dark",
     label: "Solarized Dark",
     colorScheme: "dark",
@@ -471,6 +513,9 @@ const SPACINGS = {
   presentation: { name: 'Presentation', value: 2.0 }
 };
 
+// မြန်မာည် — sample Myanmar text for the settings preview.
+const PREVIEW_MYANMAR = '\u1019\u1004\u103A\u1039\u1002\u101C\u102C\u1015\u102B ';
+
 const DEFAULTS = { theme: DEFAULT_THEME, font: IS_WIN ? 'cascadia' : 'menlo', customFont: '', fontSize: 14, spacing: 'normal' };
 
 function loadSettings() {
@@ -496,6 +541,74 @@ function fontFamilyFor(s) {
     ? (s.customFont.trim() || DEFAULT_BASE)
     : (FONTS[s.font] || FONTS.menlo).family;
   return `${base}, ${MYANMAR_FALLBACK}`;
+}
+
+// Apply only inline style changes to the preview (cheap — no DOM rebuild).
+// Used during font-size slider drags where only size/lineHeight change.
+function updatePreviewStyles() {
+  const el = document.getElementById('preview-content');
+  if (!el) return;
+  const t = themeFor(draft);
+  el.style.fontFamily = fontFamilyFor(draft);
+  el.style.fontSize = draft.fontSize + 'px';
+  el.style.lineHeight = (SPACINGS[draft.spacing] || SPACINGS.normal).value;
+  // Update the meta label text (font · size · spacing) without rebuilding DOM.
+  const meta = el.lastElementChild;
+  if (meta && meta.classList.contains('preview-meta')) {
+    const spacingLabel = (SPACINGS[draft.spacing] || SPACINGS.normal).name;
+    const fontLabel = draft.font === 'custom' ? (draft.customFont.trim() || 'Custom') : (FONTS[draft.font] || {}).name || draft.font;
+    meta.textContent = fontLabel + ' \u00b7 ' + draft.fontSize + 'px \u00b7 ' + spacingLabel;
+  }
+}
+
+// Full rebuild of the settings-panel preview. Called on theme, font, or spacing
+// changes; updatePreviewStyles() handles the cheaper font-size-only slider path.
+function renderPreview() {
+  const el = document.getElementById('preview-content');
+  if (!el) return;
+  const t = themeFor(draft);
+
+  el.style.background = t.background;
+  el.style.color = t.foreground;
+  el.style.fontFamily = fontFamilyFor(draft);
+  el.style.fontSize = draft.fontSize + 'px';
+  el.style.lineHeight = (SPACINGS[draft.spacing] || SPACINGS.normal).value;
+
+  // Tint the mini title bar to match the theme (scoped to the preview box).
+  const dark = t.colorScheme === 'dark';
+  const box = el.closest('.settings-preview');
+  if (box) {
+    box.style.setProperty('--preview-chrome', dark ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.06)');
+    box.style.setProperty('--preview-border', dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)');
+    box.style.setProperty('--preview-title-fg', dark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.35)');
+  }
+
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const clr = (c, txt) => '<span style="color:' + c + '">' + esc(txt) + '</span>';
+
+  const prompt = '<span class="preview-prompt">$ </span>';
+  const cmd = clr(t.ansi[4], 'git') + ' status ' + clr(t.ansi[3], '--short');
+  const out1 = clr(t.ansi[1], ' M renderer.js');
+  const out2 = clr(t.ansi[2], ' M index.html');
+  const out3 = clr(t.ansi[5], '?? preview-feature');
+  const myan = prompt + clr(t.ansi[6], PREVIEW_MYANMAR);
+  const cur = '<span class="preview-cursor" style="background:' + t.cursor + '"></span>';
+
+  // ANSI 16-color palette swatches.
+  let pal = '';
+  t.ansi.forEach((c) => { pal += '<span class="preview-swatch" style="background:' + c + '"></span>'; });
+
+  const spacingLabel = (SPACINGS[draft.spacing] || SPACINGS.normal).name;
+  const fontLabel = draft.font === 'custom' ? (draft.customFont.trim() || 'Custom') : (FONTS[draft.font] || {}).name || draft.font;
+
+  el.innerHTML =
+    '<div class="preview-line">' + prompt + cmd + '</div>' +
+    '<div class="preview-line">' + out1 + '</div>' +
+    '<div class="preview-line">' + out2 + '</div>' +
+    '<div class="preview-line">' + out3 + '</div>' +
+    '<div class="preview-line">' + myan + cur + '</div>' +
+    '<div class="preview-palette">' + pal + '</div>' +
+    '<div class="preview-meta">' + esc(fontLabel) + ' \u00b7 ' + draft.fontSize + 'px \u00b7 ' + spacingLabel + '</div>';
 }
 
 // --- Myanmar mark width (per screen + per app) -----------------------------
@@ -1125,9 +1238,10 @@ function selectTab(tab) {
 }
 
 function closeTab(tab) {
+  const idx = tabs.indexOf(tab);
+  if (idx === -1) return; // guard against stale references (e.g. menu after IPC removal)
   leavesOf(tab.root).forEach(disposePane);
   tab.el.remove();
-  const idx = tabs.indexOf(tab);
   tabs.splice(idx, 1);
 
   if (tabs.length === 0) {
@@ -1264,6 +1378,12 @@ function renderTabBar() {
       selectTab(tab);
       startTabDrag(tab, e);
     });
+    // Right-click on tab → context menu (Close / Close Other Tabs).
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showTabMenu(e.clientX, e.clientY, tab);
+    });
     bar.appendChild(el);
   });
   // Keep the app menu's "Go to Tab N" list in sync with the open tabs.
@@ -1321,7 +1441,9 @@ const MENU_ICONS = {
   'split-right': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="10" y="4" width="6" height="11" rx="2" fill="currentColor" stroke="none"/>',
   'split-left': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="3" y="4" width="6" height="11" rx="2" fill="currentColor" stroke="none"/>',
   'split-down': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="3" y="10" width="13" height="5" rx="2" fill="currentColor" stroke="none"/>',
-  'split-up': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="3" y="4" width="13" height="5" rx="2" fill="currentColor" stroke="none"/>'
+  'split-up': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="3" y="4" width="13" height="5" rx="2" fill="currentColor" stroke="none"/>',
+  close: '<line x1="5" y1="5" x2="14" y2="14"/><line x1="14" y1="5" x2="5" y2="14"/>',
+  'close-others': '<rect x="3" y="4" width="13" height="11" rx="2"/><line x1="7" y1="8" x2="12" y2="8"/><line x1="7" y1="11" x2="12" y2="11"/>'
 };
 const svgIcon = (name) =>
   '<svg class="pane-menu-icon" viewBox="0 0 19 19" fill="none" stroke="currentColor" stroke-width="1.4">' +
@@ -1331,6 +1453,60 @@ let paneMenuEl = null;
 function hidePaneMenu() {
   if (paneMenuEl) { paneMenuEl.remove(); paneMenuEl = null; }
 }
+function showTabMenu(x, y, tab) {
+  hidePaneMenu();
+  const items = [];
+  items.push({ label: 'Close', icon: 'close', action: () => closeTab(tab) });
+  if (tabs.length > 1) {
+    items.push({ label: 'Close Other Tabs', icon: 'close-others', action: () => closeOtherTabs(tab) });
+  }
+
+  const menu = document.createElement('div');
+  menu.className = 'pane-menu';
+  for (const it of items) {
+    if (it.sep) {
+      const s = document.createElement('div');
+      s.className = 'pane-menu-sep';
+      menu.appendChild(s);
+      continue;
+    }
+    const row = document.createElement('div');
+    row.className = 'pane-menu-item';
+    row.innerHTML = svgIcon(it.icon) + '<span>' + it.label + '</span>';
+    row.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      hidePaneMenu();
+      it.action();
+    });
+    menu.appendChild(row);
+  }
+  document.body.appendChild(menu);
+  paneMenuEl = menu;
+
+  // Keep the menu inside the viewport.
+  const r = menu.getBoundingClientRect();
+  const px = Math.min(x, window.innerWidth - r.width - 4);
+  const py = Math.min(y, window.innerHeight - r.height - 4);
+  menu.style.left = Math.max(4, px) + 'px';
+  menu.style.top = Math.max(4, py) + 'px';
+}
+
+function closeOtherTabs(keepTab) {
+  // Batch removal: dispose panes + DOM for all closing tabs, splice once, then
+  // do a single selectTab + renderTabBar instead of O(n) rebuild cycles.
+  const toClose = tabs.filter((t) => t !== keepTab);
+  for (const t of toClose) {
+    leavesOf(t.root).forEach(disposePane);
+    t.el.remove();
+  }
+  // Splice all closing tabs out in one pass (reverse to keep indices stable).
+  for (let i = tabs.length - 1; i >= 0; i--) {
+    if (tabs[i] !== keepTab) tabs.splice(i, 1);
+  }
+  selectTab(keepTab);
+}
+
 function showPaneMenu(x, y, pane) {
   hidePaneMenu();
   const hasSel = !!(pane.term.getSelection());
@@ -1491,6 +1667,13 @@ function syncControls() {
 function edit(patch) {
   draft = Object.assign({}, draft, patch);
   syncControls();
+  // Font-size-only changes skip the full DOM rebuild — just update inline styles
+  // and the meta label text (cheap path for the slider's rapid input events).
+  if (Object.keys(patch).length === 1 && patch.fontSize !== undefined) {
+    updatePreviewStyles();
+  } else {
+    renderPreview();
+  }
 }
 
 themeSel.addEventListener('change', () => edit({ theme: themeSel.value }));
@@ -1567,11 +1750,13 @@ async function loadSystemFonts() {
   // Reflect the (possibly migrated) selection in the now-rebuilt dropdown.
   draft = Object.assign({}, draft, { font: migrateFontKey(draft.font, families) });
   syncControls();
+  renderPreview();
 }
 
 function openSettings() {
   draft = Object.assign({}, settings); // start from the active settings
   syncControls();
+  renderPreview();
   overlay.classList.add('open');
   loadSystemFonts(); // lazily replace built-ins with installed monospaced fonts
 }

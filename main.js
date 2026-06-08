@@ -138,6 +138,7 @@ const ptyBuffers = new Map();    // ptyId -> string[] of output coalesced this t
 let widCounter = 0;              // logical per-window id, only for unique pty-id prefixes
 const tabCounts = new Map();     // BrowserWindow.id -> tab count (drives "Go to Tab N")
 const pendingAdopt = new Map();  // BrowserWindow.id -> callback to run once its renderer is ready
+let quitting = false;            // set in before-quit to guard pollPtyProcesses
 
 function ownerWindow(id) {
   const rec = ptys.get(id);
@@ -174,6 +175,7 @@ function resolveNodeCmd(shellPid) {
 }
 
 function pollPtyProcesses() {
+  if (quitting) return;
   for (const [id, rec] of ptys) {
     let raw = '';
     try { raw = (rec.proc.process || '').toString(); } catch (e) { /* dead pty */ }
@@ -601,6 +603,19 @@ app.on('ready', () => {
   const startDir = pendingOpenDir || getDirFromArgv(process.argv);
   createWindow(undefined, startDir);
   pendingOpenDir = null;
+});
+
+// node-pty's native accessors (`.process`, `.pid`) throw a Napi::Error after the
+// pty exits, and during app quit the native addon tears down while the polling
+// interval is still firing. Kill every surviving pty BEFORE the native cleanup
+// runs, so no stray Napi call can abort the process.
+app.on('before-quit', () => {
+  quitting = true;
+  for (const [id, rec] of ptys) {
+    try { rec.proc.kill(); } catch (e) { }
+    ptys.delete(id);
+  }
+  ptyBuffers.clear();
 });
 
 app.on('window-all-closed', () => {

@@ -274,6 +274,7 @@
       max-width: 90vw;
       max-height: 86vh;
       overflow-y: auto;
+      scrollbar-width: none;        /* Firefox */
       background: linear-gradient(var(--panel-top, #252526), var(--panel-bottom, #1e1e1e));
       color: var(--panel-fg, #d4d4d4);
       border: 1px solid var(--panel-border, #3c3c3c);
@@ -289,6 +290,9 @@
     #settings-overlay.open #settings-panel {
       transform: none;
     }
+
+    /* Hide the settings-panel scrollbar (still scrollable by wheel / trackpad). */
+    #settings-panel::-webkit-scrollbar { display: none; }
 
     /* Header */
     .settings-header {
@@ -336,6 +340,18 @@
 
     .setting-row {
       margin-bottom: 18px;
+    }
+
+    /* Two-column layout for paired settings (e.g. Theme + Line spacing). */
+    .setting-row-pair {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .setting-row-pair .setting-row {
+      margin-bottom: 0;
     }
 
     .setting-row label {
@@ -468,6 +484,92 @@
       display: none !important;
     }
 
+    /* Live preview — mini terminal showing draft theme / font / size / spacing */
+    .settings-preview {
+      border: 1px solid var(--panel-border, #3c3c3c);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 18px;
+    }
+
+    .preview-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 12px;
+      background: var(--preview-chrome, rgba(0, 0, 0, 0.2));
+      border-bottom: 1px solid var(--preview-border, rgba(255, 255, 255, 0.06));
+    }
+
+    .preview-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+    }
+
+    .preview-dot-r { background: #ff5f57; }
+    .preview-dot-y { background: #febc2e; }
+    .preview-dot-g { background: #28c840; }
+
+    .preview-title {
+      flex: 1;
+      text-align: center;
+      font-size: 11px;
+      color: var(--preview-title-fg, rgba(255, 255, 255, 0.35));
+      margin-right: 33px; /* balance the 3 dots on the left */
+    }
+
+    .preview-content {
+      padding: 10px 12px;
+      overflow: hidden;
+      line-height: 1.5;
+      /* Font / size / bg / fg set inline by renderPreview() */
+    }
+
+    .preview-line {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .preview-prompt { opacity: 0.6; }
+
+    .preview-cursor {
+      display: inline-block;
+      width: 0.55em;
+      height: 1.1em;
+      vertical-align: text-bottom;
+      animation: preview-blink 1s step-end infinite;
+    }
+
+    @keyframes preview-blink {
+      50% { opacity: 0; }
+    }
+
+    .preview-palette {
+      display: flex;
+      gap: 3px;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--preview-border, rgba(255, 255, 255, 0.06));
+      flex-wrap: wrap;
+    }
+
+    .preview-swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+    }
+
+    .preview-meta {
+      margin-top: 6px;
+      font-size: 10px;
+      opacity: 0.45;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     /* Floating find bar — searches the active pane (Cmd+F). */
     #find-bar {
       position: fixed;
@@ -592,9 +694,16 @@
       </div>
 
       <div class="settings-body">
-        <div class="setting-row">
-          <label for="set-theme">Theme</label>
-          <select id="set-theme"></select>
+        <div class="setting-row-pair">
+          <div class="setting-row">
+            <label for="set-theme">Theme</label>
+            <select id="set-theme"></select>
+          </div>
+
+          <div class="setting-row">
+            <label for="set-spacing">Line spacing</label>
+            <select id="set-spacing"></select>
+          </div>
         </div>
 
         <div class="setting-row">
@@ -612,9 +721,14 @@
           <input type="range" id="set-size" min="8" max="32" step="1" value="14" />
         </div>
 
-        <div class="setting-row">
-          <label for="set-spacing">Line spacing</label>
-          <select id="set-spacing"></select>
+        <div class="settings-preview" id="settings-preview">
+          <div class="preview-header">
+            <span class="preview-dot preview-dot-r"></span>
+            <span class="preview-dot preview-dot-y"></span>
+            <span class="preview-dot preview-dot-g"></span>
+            <span class="preview-title">myanso</span>
+          </div>
+          <div class="preview-content" id="preview-content"></div>
         </div>
       </div>
 
