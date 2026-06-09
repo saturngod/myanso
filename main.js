@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, Menu, screen, nativeImage } = require('elec
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { execSync } = require('child_process');
+const { exec, execSync } = require('child_process');
 const pty = require('node-pty');
 
 // On Windows prefer PowerShell 7 (pwsh) if installed — it has better Unicode
@@ -12,7 +12,6 @@ function resolveShell() {
   if (os.platform() !== 'win32') return process.env.SHELL || 'bash';
   try {
     // `where` is the Windows equivalent of `which`. Throws if not found.
-    const { execSync } = require('child_process');
     execSync('where pwsh.exe', { stdio: 'ignore' });
     return 'pwsh.exe';
   } catch (_) {
@@ -162,36 +161,48 @@ function flushPtyBuffers() {
 // app. node-pty exposes the tty's current foreground process via `.process`; poll
 // it and tell the owner window when it changes. Set MYAN_DEBUG_PROC=1 to log the
 // reported names (useful when adding an app to the width lists in renderer.js).
-function resolveNodeCmd(shellPid) {
-  try {
-    // Find the full command of the node process that is a child of the shell.
-    const out = execSync(
-      `ps -o pid=,command= -p $(pgrep -P ${shellPid} node 2>/dev/null | tail -1) 2>/dev/null`,
-      { shell: '/bin/sh', timeout: 500 }
-    ).toString().trim();
-    if (process.env.MYAN_DEBUG_PROC) console.log('[myan] node cmd:', JSON.stringify(out));
-    return out;
-  } catch (e) { return ''; }
+function resolveNodeCmd(shellPid, cb) {
+  // Async on purpose: execSync here would stall the whole main process — every
+  // window's IPC, menus, and pty output flushing — for up to the 500ms timeout
+  // each time a node-based CLI starts in any pane.
+  exec(
+    `ps -o pid=,command= -p $(pgrep -P ${shellPid} node 2>/dev/null | tail -1) 2>/dev/null`,
+    { shell: '/bin/sh', timeout: 500 },
+    (err, stdout) => {
+      const out = err ? '' : stdout.toString().trim();
+      if (process.env.MYAN_DEBUG_PROC) console.log('[myan] node cmd:', JSON.stringify(out));
+      cb(out);
+    }
+  );
+}
+
+function reportPtyProcess(id, rec, name) {
+  if (process.env.MYAN_DEBUG_PROC) console.log('[myan] pty', id, 'foreground:', JSON.stringify(name));
+  rec.lastProcess = name;
+  const w = ownerWindow(id);
+  if (w) w.webContents.send('pty-process', { id, name });
 }
 
 function pollPtyProcesses() {
   if (quitting) return;
   for (const [id, rec] of ptys) {
     let raw = '';
-    try { raw = (rec.proc.process || '').toString(); } catch (e) { /* dead pty */ }
+    let pid = 0;
+    try { raw = (rec.proc.process || '').toString(); pid = rec.proc.pid; } catch (e) { /* dead pty */ }
     // Skip expensive resolution if the raw name hasn't changed.
     if (raw === rec.lastRaw) continue;
     rec.lastRaw = raw;
-    let name = raw;
-    // When foreground is "node", resolve full command to distinguish apps like codex.
-    if (raw === 'node') {
-      const cmd = resolveNodeCmd(rec.proc.pid);
-      if (cmd) name = 'node:' + cmd;
+    // When foreground is "node", resolve full command to distinguish apps like
+    // codex. Report once it's known — unless the foreground changed again while
+    // ps/pgrep ran, in which case a later poll already reported the new app.
+    if (raw === 'node' && pid) {
+      resolveNodeCmd(pid, (cmd) => {
+        if (quitting || ptys.get(id) !== rec || rec.lastRaw !== 'node') return;
+        reportPtyProcess(id, rec, cmd ? 'node:' + cmd : 'node');
+      });
+      continue;
     }
-    if (process.env.MYAN_DEBUG_PROC) console.log('[myan] pty', id, 'foreground:', JSON.stringify(name));
-    rec.lastProcess = name;
-    const w = ownerWindow(id);
-    if (w) w.webContents.send('pty-process', { id, name });
+    reportPtyProcess(id, rec, raw);
   }
 }
 
@@ -232,15 +243,18 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
     // later render is buffered, never drawn). So carry a trailing partial of
     // `\e[?2026h/l` over to the next chunk before stripping.
     const rec = ptys.get(id);
-    data = (rec ? rec.syncCarry : '') + data;
-    if (rec) rec.syncCarry = '';
-    data = data.replace(/\x1b\[\?2026[hl]/g, '');
-    // Hold back a trailing fragment that could be the start of a 2026 sequence
-    // (at least `\e[?2`, so ordinary CSI/color codes aren't delayed a chunk).
-    const partial = data.match(/\x1b\[\?2(?:0(?:2(?:6)?)?)?$/);
-    if (partial && rec) {
-      rec.syncCarry = data.slice(partial.index);
-      data = data.slice(0, partial.index);
+    if (rec && rec.syncCarry) { data = rec.syncCarry + data; rec.syncCarry = ''; }
+    // Fast path: both regexes below can only match when `\e[?2` occurs in the
+    // chunk, so bulk output (cat, build logs) skips them on a cheap indexOf.
+    if (data.indexOf('\x1b[?2') !== -1) {
+      data = data.replace(/\x1b\[\?2026[hl]/g, '');
+      // Hold back a trailing fragment that could be the start of a 2026 sequence
+      // (at least `\e[?2`, so ordinary CSI/color codes aren't delayed a chunk).
+      const partial = data.match(/\x1b\[\?2(?:0(?:2(?:6)?)?)?$/);
+      if (partial && rec) {
+        rec.syncCarry = data.slice(partial.index);
+        data = data.slice(0, partial.index);
+      }
     }
     // Batch pty output per main-process tick. Under heavy output (cat largefile,
     // build logs) a pty emits many small chunks; one IPC message + one term.write
@@ -383,7 +397,12 @@ function moveTabToWindow(targetWin) {
   // Repoint each pty so its output now flows to the target window.
   for (const id of ptyIds) {
     const rec = ptys.get(id);
-    if (rec) rec.ownerWinId = targetWin.id;
+    if (rec) {
+      rec.ownerWinId = targetWin.id;
+      // A pty paused by the source renderer's flow control would never be
+      // resumed by the target (its byte counter starts fresh) — resume here.
+      if (rec.paused) { rec.paused = false; try { rec.proc.resume(); } catch (e) { } }
+    }
   }
   // Tell the target to adopt, but DON'T tear down the source yet. The source's
   // last-tab teardown closes its window, and doing that before the target has
@@ -417,6 +436,19 @@ function setupIpc() {
     if (rec) { try { rec.proc.kill(); } catch (e) { } ptys.delete(id); }
   });
 
+  // Renderer-driven flow control: when xterm's write queue backs up (a huge
+  // `cat`, fast build logs), the renderer asks main to stop reading the pty
+  // until it catches up — otherwise the queue grows without bound and the UI
+  // stalls. See writeToPane() in renderer.js for the watermarks.
+  ipcMain.on('pty-pause', (event, { id }) => {
+    const rec = ptys.get(id);
+    if (rec && !rec.paused) { rec.paused = true; try { rec.proc.pause(); } catch (e) { } }
+  });
+  ipcMain.on('pty-resume', (event, { id }) => {
+    const rec = ptys.get(id);
+    if (rec && rec.paused) { rec.paused = false; try { rec.proc.resume(); } catch (e) { } }
+  });
+
   ipcMain.on('close-window', (event) => {
     const w = BrowserWindow.fromWebContents(event.sender);
     if (w && !w.isDestroyed()) w.close();
@@ -434,10 +466,14 @@ function setupIpc() {
   ipcMain.on('open-window', () => createWindow());
 
   // A renderer reports its tab count; refresh the menu if it is the focused one.
+  // renderTabBar() sends this on every tab switch too, so skip the (relatively
+  // expensive) menu rebuild when the count didn't change; an unfocused window's
+  // change is picked up by the rebuild its 'focus' event triggers.
   ipcMain.on('tab-count', (event, n) => {
     const w = BrowserWindow.fromWebContents(event.sender);
-    if (w) tabCounts.set(w.id, n);
-    buildMenu();
+    if (!w || tabCounts.get(w.id) === n) return;
+    tabCounts.set(w.id, n);
+    if (w.isFocused()) buildMenu();
   });
 
   // A (possibly freshly created) window is ready to receive an adopted tab.

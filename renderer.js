@@ -556,7 +556,6 @@ function fontFamilyFor(s) {
 function updatePreviewStyles() {
   const el = document.getElementById('preview-content');
   if (!el) return;
-  const t = themeFor(draft);
   el.style.fontFamily = fontFamilyFor(draft);
   el.style.fontSize = draft.fontSize + 'px';
   el.style.lineHeight = (SPACINGS[draft.spacing] || SPACINGS.normal).value;
@@ -924,6 +923,35 @@ function basename(p) {
   return parts[parts.length - 1] || (IS_WIN ? '' : '/');
 }
 
+// --- Flow control ------------------------------------------------------------
+// xterm queues writes internally with no upper bound; under heavy output (cat
+// of a huge file, fast build logs) the queue outgrows what the DOM renderer can
+// drain and memory + input latency balloon. Count bytes in flight per pane and
+// ask main to pause the pty past the high mark; the write callbacks resume it
+// once drained below the low one. (Watermarks are UTF-16 units ≈ bytes.)
+const FLOW_HIGH = 1024 * 1024;  // pause above 1MB pending
+const FLOW_LOW = 128 * 1024;    // resume below 128KB
+
+function writeToPane(pane, data) {
+  pane._pending = (pane._pending || 0) + data.length;
+  if (!pane._flowPaused && pane._pending > FLOW_HIGH) {
+    pane._flowPaused = true;
+    ipcRenderer.send('pty-pause', { id: pane.ptyId });
+  }
+  try {
+    pane.term.write(data, () => {
+      pane._pending -= data.length;
+      if (pane._flowPaused && pane._pending < FLOW_LOW) {
+        pane._flowPaused = false;
+        ipcRenderer.send('pty-resume', { id: pane.ptyId });
+      }
+    });
+  } catch (e) {
+    // Disposed mid-write (tab closed/moved). A paused pty is resumed by main
+    // on hand-over (moveTabToWindow) or killed with the pane — never stuck.
+  }
+}
+
 // Open the terminal only once its element is attached to the document. xterm
 // measures a character's pixel size at open() time; opening on a detached node
 // measures ~0 and the DOM renderer then spreads every glyph with a huge
@@ -942,7 +970,7 @@ function mountPane(pane) {
   const queued = pendingData.get(pane.ptyId);
   if (queued) {
     pendingData.delete(pane.ptyId);
-    for (const d of queued) { try { pane.term.write(d); } catch (e) { } }
+    for (const d of queued) writeToPane(pane, d);
   }
   setupMarkWidth(pane.term);
   updatePaneMarkWidth(pane);   // apply width for the app already running (if known)
@@ -957,8 +985,15 @@ function mountPane(pane) {
 function fitPane(pane) {
   if (!pane.host.clientWidth || !pane.host.clientHeight) return; // hidden tab
   try {
-    pane.fitAddon.fit();
-    ipcRenderer.send('pty-resize', { id: pane.ptyId, cols: pane.term.cols, rows: pane.term.rows });
+    pane.fitAddon.fit();   // already no-ops the resize when the grid is unchanged
+    // The ResizeObserver fires for every sub-cell pixel change (divider drags,
+    // window resize) — skip the IPC + native winsize syscall when the grid
+    // didn't actually move.
+    const { cols, rows } = pane.term;
+    if (cols === pane._lastCols && rows === pane._lastRows) return;
+    pane._lastCols = cols;
+    pane._lastRows = rows;
+    ipcRenderer.send('pty-resize', { id: pane.ptyId, cols, rows });
   } catch (e) { /* terminal not measurable yet */ }
 }
 
@@ -983,14 +1018,19 @@ function releasePane(pane) {
 // Capture a pane's screen + scrollback as a string that can be written back into
 // a fresh terminal. SerializeAddon keeps colors/SGR; if it ever misbehaves with
 // this xterm build, fall back to plain text via the public buffer API.
+// Capped: this runs the moment a tab drag passes its 6px threshold (including
+// drags that end up cancelled), and serializing an unbounded scrollback makes
+// that first frame hitch. 2000 lines is plenty for a moved tab.
+const MOVE_SCROLLBACK_LINES = 2000;
 function captureScrollback(pane) {
   try {
-    return pane.serializeAddon.serialize();
+    return pane.serializeAddon.serialize({ scrollback: MOVE_SCROLLBACK_LINES });
   } catch (e) {
     let out = '';
     try {
       const b = pane.term.buffer.active;
-      for (let i = 0; i < b.length; i++) {
+      const start = Math.max(0, b.length - pane.term.rows - MOVE_SCROLLBACK_LINES);
+      for (let i = start; i < b.length; i++) {
         const line = b.getLine(i);
         if (line) out += line.translateToString(true) + '\r\n';
       }
@@ -1015,7 +1055,7 @@ function setActivePane(pane) {
       refreshTabTitle(tab); // the tab follows its active pane's title
     }
     // Re-run the search against the newly-focused pane if the find bar is open.
-    if (isFindOpen()) runFind(false);
+    if (isFindOpen()) runFind();
   }
 }
 
@@ -1404,7 +1444,7 @@ function renderTabBar() {
 ipcRenderer.on('pty-data', (event, { id, data }) => {
   const pane = panesByPtyId.get(id);
   if (pane && pane.opened) {
-    pane.term.write(data);
+    writeToPane(pane, data);
   } else {
     // Pane not built or not mounted yet (cross-window transfer in flight).
     // Buffer; mountPane drains it after scrollback replay.
@@ -1577,10 +1617,11 @@ ipcRenderer.on('select-tab', (event, i) => { if (tabs[i]) selectTab(tabs[i]); })
 
 function applySettings(s) {
   const t = themeFor(s);
+  const xt = xtermTheme(t);
   const family = fontFamilyFor(s);
   const lineHeight = (SPACINGS[s.spacing] || SPACINGS.normal).value;
   for (const pane of panesByPtyId.values()) {
-    pane.term.options.theme = xtermTheme(t);
+    pane.term.options.theme = xt;
     pane.term.options.fontFamily = family;
     pane.term.options.fontSize = s.fontSize;
     pane.term.options.lineHeight = lineHeight;
@@ -1838,9 +1879,9 @@ function updateFindCount(r) {
   findCount.textContent = (r.resultIndex >= 0 ? r.resultIndex + 1 : 1) + '/' + r.resultCount;
 }
 
-// Run the search on the active pane. `forward` true = findNext, false = re-run
-// from the current position (used when the term changes or the pane switches).
-function runFind(forward) {
+// Run the search on the active pane from its current position (used when the
+// search term changes or the active pane switches).
+function runFind() {
   if (!activePane) return;
   const term = findInput.value;
   if (!term) { activePane.searchAddon.clearDecorations(); updateFindCount(null); return; }
@@ -1857,7 +1898,7 @@ function openFind() {
   if (sel && !sel.includes('\n')) findInput.value = sel;
   findInput.focus();
   findInput.select();
-  runFind(false);
+  runFind();
 }
 
 function closeFind() {
@@ -1867,7 +1908,7 @@ function closeFind() {
   if (activePane) activePane.term.focus();
 }
 
-findInput.addEventListener('input', () => runFind(false));
+findInput.addEventListener('input', () => runFind());
 findInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); e.shiftKey ? findPrev() : findNext(); }
   else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
