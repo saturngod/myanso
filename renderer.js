@@ -984,6 +984,13 @@ function mountPane(pane) {
 
 function fitPane(pane) {
   if (!pane.host.clientWidth || !pane.host.clientHeight) return; // hidden tab
+  // A DPR change (monitor switch) while this pane was display:none made xterm
+  // re-measure glyphs against a zero-size DOM and bake a full-cell-wide
+  // letter-spacing into the rows. Re-measure now that the pane is visible.
+  if (pane._staleDpr) {
+    pane._staleDpr = false;
+    try { pane.term._core._renderService.handleDevicePixelRatioChange(); } catch (e) { }
+  }
   try {
     pane.fitAddon.fit();   // already no-ops the resize when the grid is unchanged
     // The ResizeObserver fires for every sub-cell pixel change (divider drags,
@@ -996,6 +1003,19 @@ function fitPane(pane) {
     ipcRenderer.send('pty-resize', { id: pane.ptyId, cols, rows });
   } catch (e) { /* terminal not measurable yet */ }
 }
+
+// xterm re-measures glyph metrics itself when devicePixelRatio changes, but a
+// hidden (display:none) pane measures 0 wide, which poisons its width cache and
+// letter-spacing until the next font change. Flag hidden panes on every DPR
+// change so fitPane re-measures them the moment they become visible again.
+(function watchDpr() {
+  matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('change', () => {
+    for (const pane of panesByPtyId.values()) {
+      if (!pane.host.clientWidth || !pane.host.clientHeight) pane._staleDpr = true;
+    }
+    watchDpr(); // re-arm for the new DPR value
+  }, { once: true });
+})();
 
 function disposePane(pane) {
   try { if (pane._ro) pane._ro.disconnect(); } catch (e) { }
