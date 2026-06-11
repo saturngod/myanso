@@ -726,7 +726,7 @@ const ALL_ONE_NAMES = ['claude'];           // foreground process name substring
 const ALL_ONE_TITLE = /claude/i;           // OSC terminal title → myan-allone
 const STD_MODE_NAMES = ['codex'];          // foreground process names → myan-std even on normal screen
 const SEMVER_FG = /^\d+\.\d+\.\d+/;        // Claude Code's process.title (version)
-const SHELL_FG = /^-?(zsh|bash|fish|dash|sh|ksh|tcsh|csh)$/;
+const SHELL_FG = /^-?(zsh|bash|fish|dash|sh|ksh|tcsh|csh|pwsh|powershell)(\.exe)?$/;
 
 function paneWantsAllOne(pane) {
   const fg = (pane._fgProcess || '').toLowerCase();
@@ -1096,7 +1096,7 @@ function tabFullName(tab) {
 // TUIs (e.g. "vim") have no "/" and pass through unchanged.
 function tabDisplayName(tab) {
   const full = tabFullName(tab);
-  return full.includes('/') ? (basename(full) || full) : full;
+  return /[/\\]/.test(full) ? (basename(full) || full) : full;
 }
 function refreshTabTitle(tab) {
   if (tab.titleEl) tab.titleEl.textContent = tabDisplayName(tab);
@@ -1411,7 +1411,12 @@ function startTabDrag(tab, downEvent) {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
     if (ghost) ghost.remove();
-    if (active) ipcRenderer.send('tab-drag-end');
+    if (active) {
+      // Re-serialize at drop time: output that arrived during the drag isn't in
+      // the drag-start descriptor, and would be missing from the moved tab.
+      const fresh = tabs.includes(tab) ? buildTabDescriptor(tab) : null;
+      ipcRenderer.send('tab-drag-end', fresh ? { descriptor: fresh } : undefined);
+    }
   };
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
@@ -1869,6 +1874,17 @@ function changeFontSize(next) {
   // Keep the settings panel in sync if it's open (its draft is committed on Save).
   if (overlay.classList.contains('open')) edit({ fontSize: size });
 }
+// Another window saved settings (localStorage is shared across windows; the
+// 'storage' event fires everywhere but the saver). Reload and re-apply so all
+// windows stay in sync — and so a later save HERE doesn't write stale values
+// over the other window's change.
+window.addEventListener('storage', (e) => {
+  if (e.key && e.key !== 'myanso-settings') return;
+  settings = loadSettings();
+  if (!THEMES[settings.theme]) settings.theme = DEFAULT_THEME;
+  applySettings(settings);
+});
+
 ipcRenderer.on('font-inc', () => changeFontSize(settings.fontSize + 1));
 ipcRenderer.on('font-dec', () => changeFontSize(settings.fontSize - 1));
 ipcRenderer.on('font-reset', () => changeFontSize(DEFAULTS.fontSize));
@@ -1949,5 +1965,7 @@ document.getElementById('tab-add').addEventListener('click', () => newTab());
 
 // Open the first tab. If launched by dropping a folder on the dock icon, main
 // passes it via --myanso-open= so the first tab starts there instead of $HOME.
+// A window created to receive a torn-off tab (--myanso-no-tab) skips this —
+// the adopted tab is its only content.
 const openArg = (process.argv.find((a) => a.startsWith('--myanso-open=')) || '').split('=').slice(1).join('=');
-newTab(openArg || undefined);
+if (!process.argv.includes('--myanso-no-tab')) newTab(openArg || undefined);

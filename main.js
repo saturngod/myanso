@@ -28,10 +28,15 @@ const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
 function ptyEnv() {
   const env = { ...process.env };
   if (os.platform() !== 'win32') {
-    const hasUtf8 = [env.LC_ALL, env.LC_CTYPE, env.LANG].some(
-      (v) => v && /utf-?8/i.test(v),
-    );
-    if (!hasUtf8) env.LANG = 'en_US.UTF-8';
+    // glibc precedence for character type: LC_ALL > LC_CTYPE > LANG. A non-UTF-8
+    // LC_ALL/LC_CTYPE (e.g. LC_ALL=C) overrides LANG, so just setting LANG isn't
+    // enough — drop the overriding vars before forcing LANG.
+    const utf8 = (v) => v && /utf-?8/i.test(v);
+    if (!utf8(env.LC_ALL || env.LC_CTYPE || env.LANG)) {
+      delete env.LC_ALL;
+      delete env.LC_CTYPE;
+      env.LANG = 'en_US.UTF-8';
+    }
   }
   // Tools using supports-hyperlinks (Claude Code, many node CLIs) only emit
   // OSC 8 links when they detect a supporting terminal via TERM_PROGRAM /
@@ -86,11 +91,14 @@ let pendingOpenDir = null;
 // "Open with" (or `myanso /path`) arrives as a command-line argument instead.
 // Scan argv from the end for the last token that points at an existing path,
 // skipping flags and the dev app-path '.'. A file resolves to its parent dir.
-function getDirFromArgv(argv) {
+// `cwd` (optional): the directory to resolve relative paths against — a second
+// instance's argv is relative to ITS working directory, not this process's.
+function getDirFromArgv(argv, cwd) {
   for (let i = argv.length - 1; i >= 1; i--) {
     const a = argv[i];
     if (!a || a.startsWith('-') || a === '.') continue;
-    try { fs.statSync(a); return resolveDropDir(a); } catch (_) {}
+    const full = path.resolve(cwd || process.cwd(), a);
+    try { fs.statSync(full); return resolveDropDir(full); } catch (_) {}
   }
   return null;
 }
@@ -116,8 +124,8 @@ function openFolderInRunningApp(dir) {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', (_e, argv) => {
-    const dir = getDirFromArgv(argv);
+  app.on('second-instance', (_e, argv, workingDirectory) => {
+    const dir = getDirFromArgv(argv, workingDirectory);
     if (dir) openFolderInRunningApp(dir);
     else {
       const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
@@ -285,12 +293,15 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
   });
 }
 
-function createWindow(pos, initialDir) {
+function createWindow(pos, initialDir, opts) {
   const wid = ++widCounter;
   // initialDir (optional): a folder dropped on the dock at cold start — the
   // renderer opens its first tab here instead of $HOME.
   const extraArgs = ['--myanso-wid=' + wid];
   if (initialDir) extraArgs.push('--myanso-open=' + initialDir);
+  // A window created to receive a torn-off tab must NOT open its own initial
+  // tab — the adopted tab is the only one it should show.
+  if (opts && opts.noInitialTab) extraArgs.push('--myanso-no-tab');
   const win = new BrowserWindow({
     width: 900,
     height: 600,
@@ -418,11 +429,24 @@ function moveTabToWindow(targetWin) {
     pendingRemoval.set(descriptor.tabId, sourceWin);
   }
   targetWin.webContents.send('adopt-tab', { descriptor });
+  // The descriptor doesn't carry each pane's foreground process, and the poller
+  // won't re-send it (the raw name hasn't changed) — so a moved tab running e.g.
+  // Claude Code would lose its Myanmar mark width. Re-send the last known name;
+  // IPC order guarantees adopt-tab built the panes before these arrive.
+  for (const id of ptyIds) {
+    const rec = ptys.get(id);
+    if (rec && rec.lastProcess) {
+      targetWin.webContents.send('pty-process', { id, name: rec.lastProcess });
+    }
+  }
 }
 
 function setupIpc() {
   ipcMain.on('pty-create', (event, { id, cols, rows, cwd }) => {
+    // Can be null if the window was destroyed while the IPC was in flight —
+    // a throw here would be an uncaught main-process exception.
     const w = BrowserWindow.fromWebContents(event.sender);
+    if (!w) return;
     spawnPty(id, cols, rows, cwd, w.id);
   });
   // node-pty's native write/resize/kill throw a Napi::Error if the pty already
@@ -500,8 +524,12 @@ function setupIpc() {
     }, 30);
   });
 
-  ipcMain.on('tab-drag-end', () => {
+  ipcMain.on('tab-drag-end', (event, payload) => {
     if (!dragging) return;
+    // The drag-start descriptor's scrollback is stale by drop time (output kept
+    // arriving during the drag); the source re-serializes on release and sends
+    // the fresh descriptor along.
+    if (payload && payload.descriptor) dragging.descriptor = payload.descriptor;
     const point = screen.getCursorScreenPoint();
     const target = windowAtTabBar(point);
     const sourceId = dragging.sourceWin && dragging.sourceWin.id;
@@ -520,7 +548,7 @@ function setupIpc() {
     // drag's state before the async createWindow callback restores it.
     const held = dragging;
     dragging = null;
-    const win = createWindow({ x: point.x - 40, y: point.y - 10 });
+    const win = createWindow({ x: point.x - 40, y: point.y - 10 }, undefined, { noInitialTab: true });
     onceReady(win, () => { dragging = held; moveTabToWindow(win); endDrag(); });
     if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
     setDragTarget(null);
