@@ -33,6 +33,11 @@ function ptyEnv() {
     );
     if (!hasUtf8) env.LANG = 'en_US.UTF-8';
   }
+  // Tools using supports-hyperlinks (Claude Code, many node CLIs) only emit
+  // OSC 8 links when they detect a supporting terminal via TERM_PROGRAM /
+  // FORCE_HYPERLINK / VTE_VERSION. Our TERM=xterm-color matches none, so
+  // force it on — renderer.js handles OSC 8 clicks.
+  if (env.FORCE_HYPERLINK === undefined) env.FORCE_HYPERLINK = '1';
   return env;
 }
 
