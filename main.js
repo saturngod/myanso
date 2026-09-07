@@ -239,15 +239,18 @@ function resolveNodeCmd(shellPid, cb) {
   // Async on purpose: execSync here would stall the whole main process — every
   // window's IPC, menus, and pty output flushing — for up to the 500ms timeout
   // each time a node-based CLI starts in any pane.
-  exec(
-    `ps -o pid=,command= -p $(pgrep -P ${shellPid} node 2>/dev/null | tail -1) 2>/dev/null`,
-    { shell: '/bin/sh', timeout: 500 },
-    (err, stdout) => {
-      const out = err ? '' : stdout.toString().trim();
+  // execFile (no shell, args passed as an array) is used instead of exec with
+  // a shell-interpolated string, so shellPid can never reach a shell parser.
+  if (!Number.isInteger(shellPid) || shellPid <= 0) { cb(''); return; }
+  execFile('pgrep', ['-P', String(shellPid), 'node'], { timeout: 500 }, (err, pgrepOut) => {
+    const childPid = (err ? '' : pgrepOut.toString().trim()).split('\n').filter(Boolean).pop();
+    if (!childPid) { cb(''); return; }
+    execFile('ps', ['-o', 'pid=,command=', '-p', childPid], { timeout: 500 }, (err2, stdout) => {
+      const out = err2 ? '' : stdout.toString().trim();
       if (process.env.MYAN_DEBUG_PROC) console.log('[myan] node cmd:', JSON.stringify(out));
       cb(out);
-    }
-  );
+    });
+  });
 }
 
 function reportPtyProcess(id, rec, name) {
