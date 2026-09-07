@@ -1286,9 +1286,13 @@ function attachDivider(divider, container, node, wrapA, wrapB) {
   divider.addEventListener('mousedown', (e) => {
     e.preventDefault();
     const horiz = node.dir === 'row';
+    const rect = container.getBoundingClientRect();
+    let latestEvent = e;
+    let frame = null;
     document.body.classList.add('resizing');
-    const onMove = (ev) => {
-      const rect = container.getBoundingClientRect();
+    const applyMove = () => {
+      frame = null;
+      const ev = latestEvent;
       let r = horiz ? (ev.clientX - rect.left) / rect.width
         : (ev.clientY - rect.top) / rect.height;
       r = Math.max(0.1, Math.min(0.9, r));
@@ -1296,7 +1300,15 @@ function attachDivider(divider, container, node, wrapA, wrapB) {
       wrapA.style.flex = `${r} 1 0`;
       wrapB.style.flex = `${1 - r} 1 0`;
     };
+    const onMove = (ev) => {
+      latestEvent = ev;
+      if (!frame) frame = requestAnimationFrame(applyMove);
+    };
     const onUp = () => {
+      if (frame) {
+        cancelAnimationFrame(frame);
+        applyMove();
+      }
       document.body.classList.remove('resizing');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);

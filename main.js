@@ -3,10 +3,11 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { pathToFileURL } = require('url');
-const { exec, execSync, execFileSync } = require('child_process');
+const { exec, execSync, execFile } = require('child_process');
 const pty = require('node-pty');
 const { stripSynchronizedOutput } = require('./lib/sync-output');
 const {
+  MAX_INPUT_LENGTH,
   validPtyId,
   validTabId,
   validPtyIds,
@@ -98,10 +99,7 @@ if (process.platform === 'darwin') {
 }
 app.whenReady().then(() => {
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(iconPath);
-  // Watch each pty's foreground process so the renderer can switch Myanmar mark
-  // width per app (see pollPtyProcesses). Poll often while a program is active,
-  // but back off at an idle shell to avoid native pty.process calls per pane.
-  schedulePtyProcessPoll(0);
+  // Each pty schedules its own foreground-process checks when it is created.
 });
 
 // macOS: a folder (or file) dropped onto the dock icon, or `open` from Finder,
@@ -178,6 +176,7 @@ app.on('open-file', (event, p) => {
 // window. Routing is therefore by BrowserWindow id, not a single global `win`.
 const ptys = new Map();          // ptyId -> { proc, ownerWinId }
 const ptyBuffers = new Map();    // ptyId -> string[] of output coalesced this tick
+const pendingPtyCreates = new Map(); // ptyId -> queued state while cwd resolves
 let ptyFlushScheduled = false;   // at most one cross-pty flush per event-loop turn
 let widCounter = 0;              // logical per-window id, only for unique pty-id prefixes
 const tabCounts = new Map();     // BrowserWindow.id -> tab count (drives "Go to Tab N")
@@ -186,7 +185,6 @@ let quitting = false;            // set in before-quit to guard pollPtyProcesses
 let readyToQuit = false;         // set once the user confirms quitting a busy app
 let processPollTimer = null;
 let processPollDueAt = 0;
-let processPollFastUntil = 0;
 const PROCESS_POLL_ACTIVE_MS = 600;
 const PROCESS_POLL_IDLE_MS = 2000;
 const PROCESS_POLL_INPUT_GRACE_MS = 2000;
@@ -250,8 +248,9 @@ function reportPtyProcess(id, rec, name) {
 
 function pollPtyProcesses() {
   if (quitting) return false;
-  let hasActiveProcess = false;
+  const now = Date.now();
   for (const [id, rec] of ptys) {
+    if ((rec.nextProcessPollAt || 0) > now) continue;
     let raw = '';
     let pid = 0;
     try { raw = (rec.proc.process || '').toString(); pid = rec.proc.pid; } catch (e) { /* dead pty */ }
@@ -259,7 +258,9 @@ function pollPtyProcesses() {
     // idle cadence. ssh/mosh are opaque here: the local foreground stays the
     // client for the whole remote session, so faster polling cannot reveal the
     // program running remotely. An empty name stays active until it resolves.
-    if (!isShellForeground(raw) && !REMOTE_SESSION_FG.test(baseName(raw))) hasActiveProcess = true;
+    const active = !isShellForeground(raw) && !REMOTE_SESSION_FG.test(baseName(raw));
+    rec.nextProcessPollAt = now + (active || now < (rec.processPollFastUntil || 0)
+      ? PROCESS_POLL_ACTIVE_MS : PROCESS_POLL_IDLE_MS);
     // Skip expensive resolution if the raw name hasn't changed.
     if (raw === rec.lastRaw) continue;
     rec.lastRaw = raw;
@@ -275,12 +276,20 @@ function pollPtyProcesses() {
     }
     reportPtyProcess(id, rec, raw);
   }
-  return hasActiveProcess;
 }
 
-function schedulePtyProcessPoll(delay) {
+function schedulePtyProcessPoll() {
   if (quitting) return;
-  const dueAt = Date.now() + delay;
+  let dueAt = Infinity;
+  for (const rec of ptys.values()) {
+    dueAt = Math.min(dueAt, rec.nextProcessPollAt || Date.now());
+  }
+  if (!Number.isFinite(dueAt)) {
+    if (processPollTimer) clearTimeout(processPollTimer);
+    processPollTimer = null;
+    processPollDueAt = 0;
+    return;
+  }
   // Keep an already-earlier poll. Input can preempt an idle-shell check, but
   // rapid keystrokes do not continuously push that check farther away.
   if (processPollTimer && processPollDueAt <= dueAt) return;
@@ -289,15 +298,16 @@ function schedulePtyProcessPoll(delay) {
   processPollTimer = setTimeout(() => {
     processPollTimer = null;
     processPollDueAt = 0;
-    const active = pollPtyProcesses();
-    const fast = active || Date.now() < processPollFastUntil;
-    schedulePtyProcessPoll(fast ? PROCESS_POLL_ACTIVE_MS : PROCESS_POLL_IDLE_MS);
-  }, delay);
+    pollPtyProcesses();
+    schedulePtyProcessPoll();
+  }, Math.max(0, dueAt - Date.now()));
 }
 
-function requestFastPtyProcessPoll() {
-  processPollFastUntil = Math.max(processPollFastUntil, Date.now() + PROCESS_POLL_INPUT_GRACE_MS);
-  schedulePtyProcessPoll(100);
+function requestFastPtyProcessPoll(rec) {
+  const now = Date.now();
+  rec.processPollFastUntil = Math.max(rec.processPollFastUntil || 0, now + PROCESS_POLL_INPUT_GRACE_MS);
+  rec.nextProcessPollAt = Math.min(rec.nextProcessPollAt || Infinity, now + 100);
+  schedulePtyProcessPoll();
 }
 
 // --- "A process is still running" confirm-before-close ----------------------
@@ -427,12 +437,16 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
       return;
     }
   }
-  ptys.set(id, { proc: p, ownerWinId, cwd: launchedCwd, lastProcess: '', syncCarry: '' });
+  const rec = {
+    proc: p, ownerWinId, cwd: launchedCwd, lastProcess: '', syncCarry: '',
+    nextProcessPollAt: Date.now(), processPollFastUntil: 0
+  };
+  ptys.set(id, rec);
   const owner = BrowserWindow.fromId(ownerWinId);
   if (owner && !owner.isDestroyed()) {
     owner.webContents.send('pty-cwd', { id, cwd: launchedCwd });
   }
-  requestFastPtyProcessPoll();
+  requestFastPtyProcessPoll(rec);
   p.on('data', (data) => {
     // Strip synchronized-output markers (DEC mode 2026 set/reset). xterm.js 6 has
     // a bug: when a Myanmar combining mark joins an existing cell *inside* a 2026
@@ -484,25 +498,28 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
 // a new tab would reopen $HOME. Ask the OS for the shell's real cwd instead.
 //   Linux : /proc/<pid>/cwd — a readlink, no external process.
 //   macOS : `lsof -a -p <pid> -d cwd -Fn` — no procfs equivalent exists. Only
-//           runs on new tab/split (never in the data path), and is capped by a
-//           timeout so a hung lsof can't stall the main process.
+//           runs asynchronously on new tab/split (never in the data path), and
+//           is capped by a timeout so a hung lsof cannot delay the new shell.
 // Windows has neither; it keeps using the renderer's value.
-function ptyCwd(id) {
+async function ptyCwd(id) {
   const rec = ptys.get(id);
   if (!rec) return null;
-  const pid = rec.proc && rec.proc.pid;
+  let pid;
+  try { pid = rec.proc && rec.proc.pid; } catch (_) { return rec.cwd || null; }
   if (!pid) return rec.cwd || null;
   try {
     if (process.platform === 'linux') {
-      const cwd = fs.readlinkSync(`/proc/${pid}/cwd`);
-      if (fs.statSync(cwd).isDirectory()) return cwd;
+      const cwd = await fs.promises.readlink(`/proc/${pid}/cwd`);
+      if ((await fs.promises.stat(cwd)).isDirectory()) return cwd;
     } else if (process.platform === 'darwin') {
-      const out = execFileSync('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'],
-        { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'] });
+      const out = await new Promise((resolve, reject) => {
+        execFile('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'],
+          { encoding: 'utf8', timeout: 1000 }, (error, stdout) => error ? reject(error) : resolve(stdout));
+      });
       // -Fn output is one field per line; the cwd path is the last 'n' line.
       const line = out.split('\n').filter((l) => l.startsWith('n')).pop();
       const cwd = line && line.slice(1);
-      if (cwd && fs.statSync(cwd).isDirectory()) return cwd;
+      if (cwd && (await fs.promises.stat(cwd)).isDirectory()) return cwd;
     }
   } catch (_) { }
   return rec.cwd || null;
@@ -760,14 +777,30 @@ function moveTabToWindow(targetWin) {
 
 function setupIpc() {
   ipcMain.on('pty-create', (event, payload) => {
-    if (!validPtyCreate(payload) || ptys.has(payload.id)) return;
+    if (!validPtyCreate(payload) || ptys.has(payload.id) || pendingPtyCreates.has(payload.id)) return;
     const { id, cols, rows, cwd, inheritPtyId } = payload;
     // Can be null if the window was destroyed while the IPC was in flight —
     // a throw here would be an uncaught main-process exception.
     const w = senderWindow(event);
     if (!w) return;
-    if (inheritPtyId && !ownedPty(event, inheritPtyId)) return;
-    spawnPty(id, cols, rows, inheritPtyId ? ptyCwd(inheritPtyId) : cwd, w.id);
+    if (!inheritPtyId) {
+      spawnPty(id, cols, rows, cwd, w.id);
+      return;
+    }
+    const source = ownedPty(event, inheritPtyId);
+    if (!source) return;
+    const pending = { ownerWinId: w.id, cols, rows, input: '' };
+    pendingPtyCreates.set(id, pending);
+    ptyCwd(inheritPtyId).then((resolvedCwd) => {
+      if (pendingPtyCreates.get(id) !== pending) return;
+      pendingPtyCreates.delete(id);
+      if (quitting || w.isDestroyed() || ptys.has(id) || ptys.get(inheritPtyId) !== source || source.ownerWinId !== w.id) return;
+      spawnPty(id, pending.cols, pending.rows, resolvedCwd || cwd, w.id);
+      const rec = ptys.get(id);
+      if (rec && pending.input) {
+        try { rec.proc.write(pending.input); } catch (_) { }
+      }
+    });
   });
   // node-pty's native write/resize/kill throw a Napi::Error if the pty already
   // exited (e.g. a stray resize during quit). Swallow it — an uncaught one
@@ -776,23 +809,47 @@ function setupIpc() {
     if (!validPtyInput(payload)) return;
     const { id, data } = payload;
     const rec = ownedPty(event, id);
-    if (!rec) return;
+    if (!rec) {
+      const w = senderWindow(event);
+      const pending = pendingPtyCreates.get(id);
+      if (w && pending && pending.ownerWinId === w.id && pending.input.length + data.length <= MAX_INPUT_LENGTH) {
+        pending.input += data;
+      }
+      return;
+    }
     try { rec.proc.write(data); } catch (e) { }
     // Input normally requests a prompt foreground-process check. Once the
     // foreground is a remote client, however, local PTY inspection cannot see
     // remote process changes, so repeated keystrokes should not keep polling it
     // at the active cadence.
-    if (!REMOTE_SESSION_FG.test(rec.lastRaw || '')) requestFastPtyProcessPoll();
+    if (!REMOTE_SESSION_FG.test(rec.lastRaw || '')) requestFastPtyProcessPoll(rec);
   });
   ipcMain.on('pty-resize', (event, payload) => {
     if (!validPtyResize(payload)) return;
     const rec = ownedPty(event, payload.id);
-    if (rec) { try { rec.proc.resize(payload.cols, payload.rows); } catch (e) { } }
+    if (rec) {
+      try { rec.proc.resize(payload.cols, payload.rows); } catch (e) { }
+      return;
+    }
+    const w = senderWindow(event);
+    const pending = pendingPtyCreates.get(payload.id);
+    if (w && pending && pending.ownerWinId === w.id) {
+      pending.cols = payload.cols;
+      pending.rows = payload.rows;
+    }
   });
   ipcMain.on('pty-kill', (event, payload) => {
     if (!validPtyReference(payload)) return;
     const rec = ownedPty(event, payload.id);
-    if (rec) { try { rec.proc.kill(); } catch (e) { } ptys.delete(payload.id); }
+    if (rec) {
+      try { rec.proc.kill(); } catch (e) { }
+      ptys.delete(payload.id);
+      schedulePtyProcessPoll();
+      return;
+    }
+    const w = senderWindow(event);
+    const pending = pendingPtyCreates.get(payload.id);
+    if (w && pending && pending.ownerWinId === w.id) pendingPtyCreates.delete(payload.id);
   });
 
   // Renderer-driven flow control: when xterm's write queue backs up (a huge
