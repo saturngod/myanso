@@ -16,6 +16,7 @@ const {
   validPtyResize,
   validPtyReference,
   validTabDescriptor,
+  validPaneTransfer,
   validCloseRequest
 } = require('./lib/ipc-validation');
 
@@ -217,6 +218,16 @@ function flushPtyBuffers() {
     const w = ownerWindow(id);
     if (w) w.webContents.send('pty-data', { id, data: chunks.join('') });
   }
+}
+
+function updatePtyPaused(rec) {
+  const shouldPause = !!(rec.flowPaused || rec.transferPaused);
+  if (shouldPause === !!rec.paused) return;
+  rec.paused = shouldPause;
+  try {
+    if (shouldPause) rec.proc.pause();
+    else rec.proc.resume();
+  } catch (_) { }
 }
 
 // Apps disagree on Myanmar mark widths (e.g. Claude Code counts every mark as 1,
@@ -439,7 +450,8 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
   }
   const rec = {
     proc: p, ownerWinId, cwd: launchedCwd, lastProcess: '', syncCarry: '',
-    nextProcessPollAt: Date.now(), processPollFastUntil: 0
+    nextProcessPollAt: Date.now(), processPollFastUntil: 0,
+    paused: false, flowPaused: false, transferPaused: false
   };
   ptys.set(id, rec);
   const owner = BrowserWindow.fromId(ownerWinId);
@@ -486,6 +498,9 @@ function spawnPty(id, cols, rows, cwd, ownerWinId) {
     flushPtyBuffers();
     ptyBuffers.delete(id);
     const w = ownerWindow(id);
+    for (const transfer of [...paneTransfers.values()]) {
+      if (transfer.ptyId === id) abortPaneTransfer(transfer);
+    }
     ptys.delete(id);
     if (w) w.webContents.send('pty-exit', { id });
   });
@@ -534,6 +549,13 @@ function createWindow(pos, initialDir, opts) {
   // A window created to receive a torn-off tab must NOT open its own initial
   // tab — the adopted tab is the only one it should show.
   if (opts && opts.noInitialTab) extraArgs.push('--myanso-no-tab');
+  if (pos) {
+    const area = screen.getDisplayNearestPoint(pos).workArea;
+    pos = {
+      x: Math.max(area.x, Math.min(pos.x, area.x + Math.max(0, area.width - 900))),
+      y: Math.max(area.y, Math.min(pos.y, area.y + Math.max(0, area.height - 600)))
+    };
+  }
   const win = new BrowserWindow({
     width: 900,
     height: 600,
@@ -652,6 +674,9 @@ function createWindow(pos, initialDir, opts) {
   });
 
   win.on('closed', () => {
+    for (const transfer of [...paneTransfers.values()]) {
+      if (transfer.sourceWin === win || transfer.targetWin === win) abortPaneTransfer(transfer);
+    }
     // Kill only the ptys this window still owns (moved-away tabs were repointed).
     for (const [id, rec] of ptys) {
       if (rec.ownerWinId === win.id) {
@@ -682,12 +707,13 @@ let dragging = null;     // { sourceWin, descriptor, ptyIds }
 // Tabs awaiting the expected target's adopt ack before the source removes them.
 // source tabId -> { sourceWin, targetWin, ptyIds }.
 const pendingRemoval = new Map();
+const paneTransfers = new Map();
+let paneDragging = null;
 let dragTimer = null;
 let dragTarget = null;   // window currently highlighted as a drop target
 
 function windowAtTabBar(point) {
-  for (const w of BrowserWindow.getAllWindows()) {
-    if (w.isDestroyed()) continue;
+  for (const w of candidateWindows()) {
     const b = w.getContentBounds();
     if (point.x >= b.x && point.x <= b.x + b.width &&
       point.y >= b.y && point.y <= b.y + CHROME_STRIP) {
@@ -695,6 +721,86 @@ function windowAtTabBar(point) {
     }
   }
   return null;
+}
+
+function candidateWindows() {
+  const focused = BrowserWindow.getFocusedWindow();
+  const windows = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && !w.isMinimized()).reverse();
+  if (focused && !focused.isDestroyed() && !focused.isMinimized()) {
+    return [focused, ...windows.filter((w) => w !== focused)];
+  }
+  return windows;
+}
+
+function windowAtPoint(point) {
+  for (const w of candidateWindows()) {
+    const b = w.getContentBounds();
+    if (point.x >= b.x && point.x <= b.x + b.width && point.y >= b.y && point.y <= b.y + b.height) return w;
+  }
+  return null;
+}
+
+function setPaneDragTarget(win) {
+  const previous = paneDragging && paneDragging.dragTarget;
+  if (previous === win) return;
+  if (previous && !previous.isDestroyed()) previous.webContents.send('pane-drag-over', { active: false });
+  if (win && !win.isDestroyed()) win.webContents.send('pane-drag-over', { active: true });
+  if (paneDragging) paneDragging.dragTarget = win;
+}
+
+function sendPaneDragResult(transfer, outcome) {
+  if (!transfer || transfer.sourceWin.isDestroyed()) return;
+  transfer.sourceWin.webContents.send('pane-drag-result', {
+    transferId: transfer.transferId, tabId: transfer.tabId, ptyId: transfer.ptyId, outcome
+  });
+}
+
+function abortPaneTransfer(transfer) {
+  if (!transfer || paneTransfers.get(transfer.transferId) !== transfer) return;
+  paneTransfers.delete(transfer.transferId);
+  if (transfer.timeout) clearTimeout(transfer.timeout);
+  const rec = ptys.get(transfer.ptyId);
+  if (rec) { rec.transferPaused = false; updatePtyPaused(rec); }
+  if (transfer.createdWindow && transfer.targetWin && !transfer.targetWin.isDestroyed()) {
+    transfer.targetWin._readyToClose = true;
+    transfer.targetWin.close();
+  } else if (transfer.targetWin && !transfer.targetWin.isDestroyed()) {
+    transfer.targetWin.webContents.send('discard-pane-transfer', {
+      transferId: transfer.transferId, tabId: transfer.tabId, ptyId: transfer.ptyId
+    });
+  }
+  sendPaneDragResult(transfer, 'cancelled');
+  if (paneDragging === transfer) {
+    if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
+    setPaneDragTarget(null);
+    paneDragging = null;
+  }
+}
+
+function preparePaneTransfer(transfer, targetWin) {
+  if (!transfer || !targetWin || targetWin.isDestroyed()) { abortPaneTransfer(transfer); return; }
+  const rec = ptys.get(transfer.ptyId);
+  if (!rec || rec.ownerWinId !== transfer.sourceWin.id) { abortPaneTransfer(transfer); return; }
+  transfer.targetWin = targetWin;
+  transfer.resultSent = true;
+  sendPaneDragResult(transfer, 'transferring');
+  flushPtyBuffers();
+  rec.transferPaused = true;
+  updatePtyPaused(rec);
+  transfer.timeout = setTimeout(() => abortPaneTransfer(transfer), 10000);
+  transfer.sourceWin.webContents.send('pane-transfer-serialize', {
+    transferId: transfer.transferId, tabId: transfer.tabId, ptyId: transfer.ptyId
+  });
+}
+
+function createPaneTransfer(sourceWin, payload) {
+  if (!sourceWin || !validPaneTransfer(payload) || paneTransfers.has(payload.transferId) ||
+      [...paneTransfers.values()].some((item) => item.ptyId === payload.ptyId)) return null;
+  const rec = ptys.get(payload.ptyId);
+  if (!rec || rec.ownerWinId !== sourceWin.id || pendingPtyCreates.has(payload.ptyId)) return null;
+  const transfer = { sourceWin, transferId: payload.transferId, tabId: payload.tabId, ptyId: payload.ptyId };
+  paneTransfers.set(payload.transferId, transfer);
+  return transfer;
 }
 
 function setDragTarget(win) {
@@ -752,7 +858,9 @@ function moveTabToWindow(targetWin) {
       rec.ownerWinId = targetWin.id;
       // A pty paused by the source renderer's flow control would never be
       // resumed by the target (its byte counter starts fresh) — resume here.
-      if (rec.paused) { rec.paused = false; try { rec.proc.resume(); } catch (e) { } }
+      rec.flowPaused = false;
+      rec.transferPaused = false;
+      updatePtyPaused(rec);
     }
   }
   // Tell the target to adopt, but DON'T tear down the source yet. The source's
@@ -859,12 +967,12 @@ function setupIpc() {
   ipcMain.on('pty-pause', (event, payload) => {
     if (!validPtyReference(payload)) return;
     const rec = ownedPty(event, payload.id);
-    if (rec && !rec.paused) { rec.paused = true; try { rec.proc.pause(); } catch (e) { } }
+    if (rec) { rec.flowPaused = true; updatePtyPaused(rec); }
   });
   ipcMain.on('pty-resume', (event, payload) => {
     if (!validPtyReference(payload)) return;
     const rec = ownedPty(event, payload.id);
-    if (rec && rec.paused) { rec.paused = false; try { rec.proc.resume(); } catch (e) { } }
+    if (rec) { rec.flowPaused = false; updatePtyPaused(rec); }
   });
 
   ipcMain.on('close-window', (event) => {
@@ -928,12 +1036,103 @@ function setupIpc() {
     if (cb) { pendingAdopt.delete(w.id); cb(); }
   });
 
+  ipcMain.on('pane-drag-start', (event, payload) => {
+    endDrag('cancelled');
+    if (paneDragging) abortPaneTransfer(paneDragging);
+    const sourceWin = senderWindow(event);
+    const transfer = createPaneTransfer(sourceWin, payload);
+    if (!transfer) {
+      if (sourceWin && validPaneTransfer(payload)) sourceWin.webContents.send('pane-drag-result', { ...payload, outcome: 'cancelled' });
+      return;
+    }
+    paneDragging = transfer;
+    dragTimer = setInterval(() => {
+      if (!paneDragging) return;
+      const target = windowAtTabBar(screen.getCursorScreenPoint());
+      setPaneDragTarget(target && target !== paneDragging.sourceWin ? target : null);
+    }, 30);
+  });
+
+  ipcMain.on('pane-drag-end', (event, payload) => {
+    const sourceWin = senderWindow(event);
+    const transfer = paneDragging;
+    if (!transfer || sourceWin !== transfer.sourceWin || !validPaneTransfer(payload) ||
+        payload.transferId !== transfer.transferId || payload.ptyId !== transfer.ptyId) return;
+    if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
+    setPaneDragTarget(null);
+    paneDragging = null;
+    const point = screen.getCursorScreenPoint();
+    const tabTarget = windowAtTabBar(point);
+    if (tabTarget && tabTarget !== sourceWin) { preparePaneTransfer(transfer, tabTarget); return; }
+    if (windowAtPoint(point)) { abortPaneTransfer(transfer); return; }
+    const win = createWindow({ x: point.x - 40, y: point.y - 10 }, undefined, { noInitialTab: true });
+    transfer.createdWindow = true;
+    transfer.targetWin = win;
+    onceReady(win, () => preparePaneTransfer(transfer, win));
+  });
+
+  ipcMain.on('pane-drag-cancel', (event, payload) => {
+    const transfer = payload && paneTransfers.get(payload.transferId);
+    if (!transfer || senderWindow(event) !== transfer.sourceWin) return;
+    if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
+    setPaneDragTarget(null);
+    paneDragging = null;
+    abortPaneTransfer(transfer);
+  });
+
+  ipcMain.on('pane-move-new-window', (event, payload) => {
+    const sourceWin = senderWindow(event);
+    const transfer = createPaneTransfer(sourceWin, payload);
+    if (!transfer) {
+      if (sourceWin && validPaneTransfer(payload)) sourceWin.webContents.send('pane-drag-result', { ...payload, outcome: 'cancelled' });
+      return;
+    }
+    const b = sourceWin.getBounds();
+    const win = createWindow({ x: b.x + 48, y: b.y + 48 }, undefined, { noInitialTab: true });
+    transfer.createdWindow = true;
+    transfer.targetWin = win;
+    onceReady(win, () => preparePaneTransfer(transfer, win));
+  });
+
+  ipcMain.on('pane-transfer-serialized', (event, payload) => {
+    if (!validPaneTransfer(payload, true) || payload.descriptor.ptyId !== payload.ptyId) return;
+    const transfer = paneTransfers.get(payload.transferId);
+    const sourceWin = senderWindow(event);
+    if (!transfer || sourceWin !== transfer.sourceWin || payload.tabId !== transfer.tabId ||
+        payload.ptyId !== transfer.ptyId || !transfer.targetWin || transfer.targetWin.isDestroyed()) return;
+    transfer.targetWin.webContents.send('adopt-pane', payload);
+  });
+
+  ipcMain.on('pane-transfer-failed', (event, payload) => {
+    const transfer = payload && paneTransfers.get(payload.transferId);
+    if (transfer && senderWindow(event) === transfer.sourceWin) abortPaneTransfer(transfer);
+  });
+
+  ipcMain.on('pane-adopted', (event, payload) => {
+    if (!validPaneTransfer(payload)) return;
+    const transfer = paneTransfers.get(payload.transferId);
+    const targetWin = senderWindow(event);
+    if (!transfer || targetWin !== transfer.targetWin || payload.tabId !== transfer.tabId || payload.ptyId !== transfer.ptyId) return;
+    const rec = ptys.get(transfer.ptyId);
+    if (!rec || rec.ownerWinId !== transfer.sourceWin.id) { abortPaneTransfer(transfer); return; }
+    paneTransfers.delete(transfer.transferId);
+    if (transfer.timeout) clearTimeout(transfer.timeout);
+    rec.ownerWinId = targetWin.id;
+    transfer.sourceWin.webContents.send('remove-transferred-pane', payload);
+    targetWin.webContents.send('commit-pane-transfer', payload);
+    if (rec.lastProcess) targetWin.webContents.send('pty-process', { id: transfer.ptyId, name: rec.lastProcess });
+    rec.transferPaused = false;
+    rec.flowPaused = false;
+    updatePtyPaused(rec);
+  });
+
   // Tab drag: source window announces the drag; main polls the cursor.
   ipcMain.on('tab-drag-start', (event, payload) => {
     if (!payload || !validTabDescriptor(payload.descriptor) || !validPtyIds(payload.ptyIds) ||
         payload.ptyIds.length !== payload.descriptor.ptyIds.length ||
         !payload.ptyIds.every((id) => payload.descriptor.ptyIds.includes(id) && ownedPty(event, id))) return;
     endDrag('cancelled');
+    if (paneDragging) abortPaneTransfer(paneDragging);
     const sourceWin = senderWindow(event);
     if (!sourceWin) return;
     dragging = { sourceWin, descriptor: payload.descriptor, ptyIds: [...payload.ptyIds] };

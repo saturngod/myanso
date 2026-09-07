@@ -12,6 +12,18 @@ test('validates generated PTY and tab ids', () => {
   assert.equal(v.validPtyId('pty_other'), false);
   assert.equal(v.validTabId('tab_12_34'), true);
   assert.equal(v.validTabId('../tab_1_2'), false);
+  assert.equal(v.validTransferId('transfer_12_34'), true);
+  assert.equal(v.validTransferId('transfer_bad'), false);
+});
+
+test('validates individual pane transfer payloads', () => {
+  const pane = { ptyId: 'pty_1_2', cwd: '/tmp', title: 'shell', scrollback: '', cols: 80, rows: 24, foreground: 'zsh' };
+  const transfer = { transferId: 'transfer_1_3', tabId: 'tab_1_1', ptyId: 'pty_1_2', descriptor: pane };
+  assert.equal(v.validPaneDescriptor(pane), true);
+  assert.equal(v.validPaneTransfer(transfer, true), true);
+  assert.equal(v.validPaneTransfer({ ...transfer, ptyId: 'pty_1_9' }, true), false);
+  assert.equal(v.validPaneTransfer({ ...transfer, transferId: '../bad' }, true), false);
+  assert.equal(v.validPaneTransfer({ ...transfer, descriptor: { ...pane, cols: 0 } }, true), false);
 });
 
 test('bounds PTY creation, resize, input, and references', () => {

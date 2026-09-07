@@ -7,7 +7,9 @@ const { SearchAddon } = require('@xterm/addon-search');
 const { quoteShellPath, parseOsc7, terminalBasename } = require('./lib/terminal-utils');
 const { insertionIndex, edgeScrollVelocity } = require('./lib/tab-drag');
 const { isMyanmarMark, isMyanmarNonspacing, appWidthModeForContext } = require('./lib/myanmar-width');
-const { validPtyId, validTabId, validTabDescriptor, validTabDragResult } = require('./lib/ipc-validation');
+const {
+  validPtyId, validTabId, validTabDescriptor, validTabDragResult, validPaneTransfer
+} = require('./lib/ipc-validation');
 
 // Each window gets a unique id (passed by main via additionalArguments) so two
 // windows never generate the same pty/tab id. Tells main this renderer is ready
@@ -725,9 +727,11 @@ function okToClosePtyIds(ptyIds) {
   return ipcRenderer.invoke('confirm-close-ptys', { ptyIds });
 }
 async function requestClosePane(pane) {
+  if (pane && pane._transferring) return;
   if (pane && (await okToClosePtyIds([pane.ptyId]))) closePane(pane);
 }
 async function requestCloseTab(tab) {
+  if (tab && leavesOf(tab.root).some((pane) => pane._transferring)) return;
   if (tab && (await okToClosePtyIds(leavesOf(tab.root).map((p) => p.ptyId)))) closeTab(tab);
 }
 
@@ -779,6 +783,7 @@ const tabs = [];                  // ordered list of open tabs
 let currentTab = null;
 let activePane = null;
 let activeTabDrag = null;
+let activePaneDrag = null;
 let counter = 0;
 const nextId = (p) => p + '_' + WID + '_' + (++counter);
 
@@ -796,11 +801,30 @@ function createPane(tabId, cwd, reattach) {
 
   const el = document.createElement('div');
   el.className = 'pane';
+  const header = document.createElement('div');
+  header.className = 'pane-header';
+  const headerClose = document.createElement('button');
+  headerClose.className = 'pane-header-button pane-header-close';
+  headerClose.type = 'button';
+  headerClose.title = 'Close pane';
+  headerClose.setAttribute('aria-label', 'Close pane');
+  headerClose.textContent = '×';
+  const headerTitle = document.createElement('span');
+  headerTitle.className = 'pane-header-title';
+  const headerMenu = document.createElement('button');
+  headerMenu.className = 'pane-header-button pane-header-menu';
+  headerMenu.type = 'button';
+  headerMenu.title = 'Pane actions';
+  headerMenu.setAttribute('aria-label', 'Pane actions');
+  headerMenu.textContent = '•••';
+  header.append(headerClose, headerTitle, headerMenu);
   const host = document.createElement('div');
   host.className = 'pane-term';
-  el.appendChild(host);
+  el.append(header, host);
 
   const term = new Terminal({
+    cols: reattach && reattach.cols ? reattach.cols : 80,
+    rows: reattach && reattach.rows ? reattach.rows : 24,
     cursorBlink: true,
     allowProposedApi: true,   // required for term.unicode (mark-width provider)
     fontFamily: fontFamilyFor(settings),
@@ -850,19 +874,44 @@ function createPane(tabId, cwd, reattach) {
   // Keep the find bar's match count in sync while this pane is the search target.
   searchAddon.onDidChangeResults((r) => { if (activePane === pane) updateFindCount(r); });
   attachShiftEnter(term, ptyId);
-  term.onData((data) => ipcRenderer.send('pty-input', { id: ptyId, data }));
+  term.onData((data) => {
+    if (!pane._provisional) ipcRenderer.send('pty-input', { id: ptyId, data });
+  });
 
   const pane = {
-    ptyId, tabId, el, host, term, fitAddon, serializeAddon, searchAddon,
+    ptyId, tabId, el, header, headerTitle, host, term, fitAddon, serializeAddon, searchAddon,
     opened: false,
     title: reattach ? reattach.title : '',
     cwd: reattach ? reattach.cwd : '',
-    _restore: reattach ? reattach.scrollback : null
+    _restore: reattach ? reattach.scrollback : null,
+    _fgProcess: reattach ? reattach.foreground : '',
+    _provisional: !!(reattach && reattach.provisional),
+    _ptyReady: !!reattach
   };
   panesByPtyId.set(ptyId, pane);
 
   // Focus this pane when its element is clicked.
   el.addEventListener('mousedown', () => setActivePane(pane));
+  headerClose.addEventListener('mousedown', (e) => e.stopPropagation());
+  headerClose.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setActivePane(pane);
+    requestClosePane(pane);
+  });
+  headerMenu.addEventListener('mousedown', (e) => e.stopPropagation());
+  headerMenu.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setActivePane(pane);
+    const r = headerMenu.getBoundingClientRect();
+    showPaneMenu(r.right, r.bottom, pane);
+  });
+  headerTitle.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setActivePane(pane);
+    startPaneDrag(pane, e);
+  });
 
   // Right-click → custom context menu (Copy when text is selected, Paste, splits).
   el.addEventListener('contextmenu', (e) => {
@@ -902,6 +951,7 @@ function createPane(tabId, cwd, reattach) {
       id: ptyId, cols: 80, rows: 24, cwd: cwd || undefined, inheritPtyId
     });
   }
+  refreshPaneHeader(pane);
   return pane;
 }
 
@@ -928,11 +978,31 @@ function writeToPane(pane, data) {
     pane.term.write(data, () => {
       pane._pending -= data.length;
       maybeResumePane(pane);
+      if (pane._pending === 0 && pane._drainWaiters) {
+        const waiters = pane._drainWaiters.splice(0);
+        waiters.forEach((resolve) => resolve(true));
+      }
     });
   } catch (e) {
     // Disposed mid-write (tab closed/moved). A paused pty is resumed by main
     // on hand-over (moveTabToWindow) or killed with the pane — never stuck.
   }
+}
+
+function whenPaneWritesDrained(pane, timeoutMs = 3000) {
+  if (!pane || !(pane._pending > 0)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    if (!pane._drainWaiters) pane._drainWaiters = [];
+    pane._drainWaiters.push(() => finish(true));
+  });
 }
 
 function maybeResumePane(pane) {
@@ -953,9 +1023,12 @@ function mountPane(pane) {
   if (pane.opened) return;
   pane.opened = true;
   pane.term.open(pane.host);
+  // Install the correct width provider before replaying a transferred screen.
+  setupMarkWidth(pane.term);
+  updatePaneMarkWidth(pane);
   // Restore scrollback for a tab that moved in from another window.
   if (pane._restore) {
-    try { pane.term.write(pane._restore); } catch (e) { }
+    writeToPane(pane, pane._restore);
     pane._restore = null;
   }
   // Drain any pty output that arrived before this pane mounted — strictly after
@@ -971,8 +1044,6 @@ function mountPane(pane) {
     pane._drainingPending = false;
     maybeResumePane(pane);
   }
-  setupMarkWidth(pane.term);
-  updatePaneMarkWidth(pane);   // apply width for the app already running (if known)
   pane.term.textarea.addEventListener('focus', () => setActivePane(pane));
   // Refit (and tell the pty) whenever the host's box changes — covers window
   // resize, divider drags, and a tab becoming visible.
@@ -1007,7 +1078,7 @@ function fitPane(pane) {
     if (cols === pane._lastCols && rows === pane._lastRows) return;
     pane._lastCols = cols;
     pane._lastRows = rows;
-    ipcRenderer.send('pty-resize', { id: pane.ptyId, cols, rows });
+    if (!pane._provisional) ipcRenderer.send('pty-resize', { id: pane.ptyId, cols, rows });
   } catch (e) { /* terminal not measurable yet */ }
 }
 
@@ -1051,10 +1122,11 @@ function releasePane(pane) {
 // the transfer snapshot bounded prevents a split tab with deep history from
 // freezing the renderer while it is handed over. 2000 lines is ample context.
 const MOVE_SCROLLBACK_LINES = 2000;
-function captureScrollback(pane) {
+function captureScrollback(pane, strict = false) {
   try {
     return pane.serializeAddon.serialize({ scrollback: MOVE_SCROLLBACK_LINES });
   } catch (e) {
+    if (strict) return null;
     let out = '';
     try {
       const b = pane.term.buffer.active;
@@ -1066,6 +1138,20 @@ function captureScrollback(pane) {
     } catch (e2) { }
     return out;
   }
+}
+
+function buildPaneDescriptor(pane) {
+  const scrollback = captureScrollback(pane, true);
+  if (scrollback === null) return null;
+  return {
+    ptyId: pane.ptyId,
+    cwd: pane.cwd || '',
+    title: pane.title || '',
+    scrollback,
+    cols: pane.term.cols,
+    rows: pane.term.rows,
+    foreground: pane._fgProcess || ''
+  };
 }
 
 function setActivePane(pane) {
@@ -1124,8 +1210,20 @@ function refreshTabTitle(tab) {
   if (tab === currentTab) document.title = tabFullName(tab);
 }
 function onPaneTitleChanged(pane) {
+  refreshPaneHeader(pane);
   const tab = tabs.find((x) => x.id === pane.tabId);
   if (tab && tab.activePtyId === pane.ptyId) refreshTabTitle(tab);
+}
+
+function paneDisplayName(pane) {
+  return (pane && (pane.title || basename(pane.cwd))) || 'Shell';
+}
+
+function refreshPaneHeader(pane) {
+  if (!pane || !pane.headerTitle) return;
+  const title = paneDisplayName(pane);
+  pane.headerTitle.textContent = title;
+  pane.headerTitle.title = title;
 }
 
 // Set (or clear, with '') a tab's user-chosen title. A non-empty title pins the
@@ -1322,6 +1420,7 @@ function renderTab(tab) {
   tab.el.innerHTML = '';
   tab.el.appendChild(renderNode(tab.root));
   const leaves = leavesOf(tab.root);
+  tab.el.classList.toggle('has-pane-headers', leaves.length > 1);
   // Now that the panes are attached, open any new terminals (correct glyph
   // measurement), then let flexbox settle and size each one.
   leaves.forEach(mountPane);
@@ -1330,7 +1429,7 @@ function renderTab(tab) {
 
 // `before` true puts the new pane ahead of the active one (Split Left / Split Up).
 function splitActive(dir, before) {
-  if (!currentTab || !activePane) return;
+  if (!currentTab || !activePane || activePane._transferring) return;
   const found = findParentOf(currentTab.root, activePane);
   // Locate the leaf node holding the active pane (root itself if unsplit).
   let leaf;
@@ -1360,21 +1459,28 @@ function splitActive(dir, before) {
 }
 
 function closePane(pane) {
+  removePaneView(pane, false);
+}
+
+function removePaneView(pane, keepPty) {
   const tab = tabs.find((x) => x.id === pane.tabId);
   if (!tab) return;
 
   // Last pane in the tab -> close the whole tab.
   if (tab.root.leaf && tab.root.pane === pane) {
-    closeTab(tab);
+    if (!keepPty) closeTab(tab);
+    else removeTabKeepPtys(tab.id);
     return;
   }
 
   const found = findParentOf(tab.root, pane);
   if (!found) return;
-  disposePane(pane);
+  const sib = found.side === 'a' ? found.parent.b : found.parent.a;
+  const nextPane = leavesOf(sib)[0];
+  if (keepPty) releasePane(pane);
+  else disposePane(pane);
 
   // Collapse the parent split into the surviving sibling.
-  const sib = found.side === 'a' ? found.parent.b : found.parent.a;
   const parent = found.parent;
   if (sib.leaf) {
     parent.leaf = true;
@@ -1390,7 +1496,7 @@ function closePane(pane) {
 
   if (tab === currentTab) {
     renderTab(tab);
-    focusPane(leavesOf(tab.root)[0]);
+    focusPane(nextPane || leavesOf(tab.root)[0]);
   } else {
     renderTab(tab);
   }
@@ -1511,6 +1617,34 @@ function rebuildTree(descNode, tabId) {
     leaf: false, dir: descNode.dir, ratio: descNode.ratio,
     a: rebuildTree(descNode.a, tabId), b: rebuildTree(descNode.b, tabId)
   };
+}
+
+const provisionalPaneTransfers = new Map();
+
+async function adoptTransferredPane(payload) {
+  const descriptor = { ...payload.descriptor, provisional: true };
+  const tab = { id: nextId('tab'), el: document.createElement('div'), root: null, activePtyId: descriptor.ptyId };
+  tab.el.className = 'tab-pane-area';
+  document.getElementById('panes').appendChild(tab.el);
+  const pane = createPane(tab.id, undefined, descriptor);
+  tab.root = { leaf: true, pane };
+  tabs.push(tab);
+  provisionalPaneTransfers.set(payload.transferId, { tab, pane, payload });
+  renderTabBar();
+  renderTab(tab);
+  selectTab(tab);
+  const restored = await whenPaneWritesDrained(pane);
+  if (!restored || provisionalPaneTransfers.get(payload.transferId)?.pane !== pane) return;
+  ipcRenderer.send('pane-adopted', {
+    transferId: payload.transferId, tabId: payload.tabId, ptyId: payload.ptyId
+  });
+}
+
+function discardTransferredPane(transferId) {
+  const provisional = provisionalPaneTransfers.get(transferId);
+  if (!provisional) return;
+  provisionalPaneTransfers.delete(transferId);
+  removeTabKeepPtys(provisional.tab.id);
 }
 
 function animateAdoptedTab(tab) {
@@ -1701,6 +1835,7 @@ function scheduleTabDragFrame(session) {
 // threshold. The compact ghost stays in this renderer; main handles screen
 // coordinates for cross-window and tear-off moves.
 function startTabDrag(tab, downEvent) {
+  if (leavesOf(tab.root).some((pane) => pane._transferring)) return;
   const startX = downEvent.clientX;
   const startY = downEvent.clientY;
   const session = {
@@ -1762,6 +1897,83 @@ function startTabDrag(tab, downEvent) {
     }, TAB_DRAG_RESULT_TIMEOUT_MS);
   };
 
+  session.removeListeners = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function finishPaneDrag(outcome) {
+  const session = activePaneDrag;
+  if (!session) return;
+  if (session.removeListeners) session.removeListeners();
+  if (session.frame) cancelAnimationFrame(session.frame);
+  if (session.timer) clearTimeout(session.timer);
+  if (session.ghost) fadeAndRemoveDragGhost(session);
+  session.ghost = null;
+  if (outcome === 'transferring') {
+    session.pane.el.classList.remove('drag-source');
+    session.pane.el.classList.add('transfer-pending');
+    session.timer = setTimeout(() => finishPaneDrag('cancelled'), 11000);
+    return;
+  }
+  session.pane._transferring = false;
+  session.pane.el.classList.remove('drag-source', 'transfer-pending');
+  activePaneDrag = null;
+}
+
+function beginPaneMoveToNewWindow(pane) {
+  if (!pane || !pane._ptyReady || pane._provisional || pane._transferring) return;
+  const transferId = nextId('transfer');
+  pane._transferring = true;
+  pane.el.classList.add('transfer-pending');
+  activePaneDrag = { pane, transferId, timer: setTimeout(() => finishPaneDrag('cancelled'), 11000) };
+  ipcRenderer.send('pane-move-new-window', { transferId, tabId: pane.tabId, ptyId: pane.ptyId });
+}
+
+function startPaneDrag(pane, downEvent) {
+  if (!pane || !pane._ptyReady || pane._provisional || pane._transferring) return;
+  if (activePaneDrag) finishPaneDrag('cancelled');
+  const startX = downEvent.clientX;
+  const startY = downEvent.clientY;
+  const session = {
+    pane, transferId: nextId('transfer'), started: false, pointer: { x: startX, y: startY },
+    ghost: null, frame: null, timer: null, removeListeners: null
+  };
+  activePaneDrag = session;
+
+  const draw = () => {
+    session.frame = null;
+    if (session.ghost) {
+      session.ghost.style.transform = `translate3d(${session.pointer.x + 8}px, ${session.pointer.y + 8}px, 0)`;
+    }
+  };
+  const onMove = (event) => {
+    session.pointer = { x: event.clientX, y: event.clientY };
+    if (!session.started) {
+      if (Math.abs(event.clientX - startX) + Math.abs(event.clientY - startY) < 6) return;
+      session.started = true;
+      pane._transferring = true;
+      pane.el.classList.add('drag-source');
+      ipcRenderer.send('pane-drag-start', { transferId: session.transferId, tabId: pane.tabId, ptyId: pane.ptyId });
+      const ghost = document.createElement('div');
+      ghost.className = 'tab-drag-ghost';
+      ghost.textContent = paneDisplayName(pane);
+      document.body.appendChild(ghost);
+      session.ghost = ghost;
+    }
+    if (!session.frame) session.frame = requestAnimationFrame(draw);
+  };
+  const onUp = () => {
+    session.removeListeners();
+    session.removeListeners = null;
+    pane.el.classList.remove('drag-source');
+    if (!session.started) { finishPaneDrag('cancelled'); return; }
+    ipcRenderer.send('pane-drag-end', { transferId: session.transferId, tabId: pane.tabId, ptyId: pane.ptyId });
+    session.timer = setTimeout(() => finishPaneDrag('cancelled'), 11000);
+  };
   session.removeListeners = () => {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
@@ -1862,7 +2074,7 @@ ipcRenderer.on('pty-cwd', (event, payload) => {
   if (!payload || !validPtyId(payload.id) || typeof payload.cwd !== 'string') return;
   const { id, cwd } = payload;
   const pane = panesByPtyId.get(id);
-  if (pane && cwd) { pane.cwd = cwd; onPaneTitleChanged(pane); }
+  if (pane && cwd) { pane.cwd = cwd; pane._ptyReady = true; onPaneTitleChanged(pane); }
 });
 // Foreground app changed in this pty — pick the Myanmar mark width it expects.
 ipcRenderer.on('pty-process', (event, payload) => {
@@ -1900,6 +2112,58 @@ ipcRenderer.on('tab-drag-over', (event, payload) => {
   }
 });
 
+ipcRenderer.on('pane-transfer-serialize', async (event, payload) => {
+  if (!validPaneTransfer(payload)) return;
+  const pane = panesByPtyId.get(payload.ptyId);
+  if (!pane || pane.tabId !== payload.tabId || !pane._transferring) return;
+  const drained = await whenPaneWritesDrained(pane);
+  const descriptor = drained ? buildPaneDescriptor(pane) : null;
+  if (!descriptor) {
+    ipcRenderer.send('pane-transfer-failed', payload);
+    return;
+  }
+  ipcRenderer.send('pane-transfer-serialized', { ...payload, descriptor });
+});
+ipcRenderer.on('adopt-pane', (event, payload) => {
+  if (validPaneTransfer(payload, true) && payload.descriptor.ptyId === payload.ptyId) adoptTransferredPane(payload);
+});
+ipcRenderer.on('commit-pane-transfer', (event, payload) => {
+  if (!validPaneTransfer(payload)) return;
+  const provisional = provisionalPaneTransfers.get(payload.transferId);
+  if (!provisional || provisional.pane.ptyId !== payload.ptyId) return;
+  provisionalPaneTransfers.delete(payload.transferId);
+  provisional.pane._provisional = false;
+  provisional.pane._transferring = false;
+  provisional.pane._lastCols = undefined;
+  provisional.pane._lastRows = undefined;
+  provisional.pane.el.classList.remove('transfer-pending');
+  scheduleFitPane(provisional.pane);
+  focusPane(provisional.pane);
+});
+ipcRenderer.on('discard-pane-transfer', (event, payload) => {
+  if (payload && typeof payload.transferId === 'string') discardTransferredPane(payload.transferId);
+});
+ipcRenderer.on('remove-transferred-pane', (event, payload) => {
+  if (!validPaneTransfer(payload)) return;
+  const pane = panesByPtyId.get(payload.ptyId);
+  if (!pane || pane.tabId !== payload.tabId) return;
+  if (activePaneDrag && activePaneDrag.transferId === payload.transferId) {
+    activePaneDrag.pane._transferring = false;
+    activePaneDrag = null;
+  }
+  removePaneView(pane, true);
+});
+ipcRenderer.on('pane-drag-result', (event, payload) => {
+  if (!payload || !['transferring', 'cancelled'].includes(payload.outcome) ||
+      !activePaneDrag || payload.transferId !== activePaneDrag.transferId) return;
+  finishPaneDrag(payload.outcome);
+});
+ipcRenderer.on('pane-drag-over', (event, payload) => {
+  if (payload && typeof payload.active === 'boolean') {
+    document.getElementById('tabbar').classList.toggle('drop-target', payload.active);
+  }
+});
+
 // --- Pane right-click context menu ------------------------------------------
 // A single floating menu element, reused for every pane. Built on demand.
 function copyPane(pane) {
@@ -1921,6 +2185,7 @@ const MENU_ICONS = {
   'split-left': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="3" y="4" width="6" height="11" rx="2" fill="currentColor" stroke="none"/>',
   'split-down': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="3" y="10" width="13" height="5" rx="2" fill="currentColor" stroke="none"/>',
   'split-up': '<rect x="3" y="4" width="13" height="11" rx="2"/><rect x="3" y="4" width="13" height="5" rx="2" fill="currentColor" stroke="none"/>',
+  window: '<rect x="3" y="4" width="13" height="11" rx="2"/><path d="M3 7h13"/><path d="M11 2l4 0 0 4"/><path d="M15 2l-5 5"/>',
   close: '<line x1="5" y1="5" x2="14" y2="14"/><line x1="14" y1="5" x2="5" y2="14"/>',
   'close-others': '<rect x="3" y="4" width="13" height="11" rx="2"/><line x1="7" y1="8" x2="12" y2="8"/><line x1="7" y1="11" x2="12" y2="11"/>',
   rename: '<path d="M12 3l4 4-8 8H4v-4z"/><line x1="10" y1="5" x2="14" y2="9"/>',
@@ -2048,6 +2313,9 @@ function showPaneMenu(x, y, pane) {
   items.push({ label: 'Split Left', icon: 'split-left', action: () => splitActive('row', true) });
   items.push({ label: 'Split Down', icon: 'split-down', action: () => splitActive('col', false) });
   items.push({ label: 'Split Up', icon: 'split-up', action: () => splitActive('col', true) });
+  items.push({ sep: true });
+  items.push({ label: 'Move Pane to New Window', icon: 'window', action: () => beginPaneMoveToNewWindow(pane) });
+  items.push({ label: 'Close Pane', icon: 'close', action: () => requestClosePane(pane) });
 
   const menu = document.createElement('div');
   menu.className = 'pane-menu';
@@ -2087,7 +2355,18 @@ function showPaneMenu(x, y, pane) {
 window.addEventListener('mousedown', () => hidePaneMenu());
 window.addEventListener('blur', () => hidePaneMenu());
 window.addEventListener('resize', () => hidePaneMenu());
-window.addEventListener('keydown', (e) => { if (e.key === 'Escape') hidePaneMenu(); });
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  hidePaneMenu();
+  if (activePaneDrag && !activePaneDrag.pane._provisional) {
+    ipcRenderer.send('pane-drag-cancel', {
+      transferId: activePaneDrag.transferId,
+      tabId: activePaneDrag.pane.tabId,
+      ptyId: activePaneDrag.pane.ptyId
+    });
+    finishPaneDrag('cancelled');
+  }
+});
 
 ipcRenderer.on('new-tab', () => newTab());
 ipcRenderer.on('open-folder', (event, payload) => {
