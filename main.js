@@ -634,6 +634,20 @@ function createWindow(pos, initialDir, opts) {
     });
   }
 
+  // Windows uses conventional clipboard shortcuts. Resolve Ctrl+C in the
+  // renderer: copy a selection, otherwise send the shell's interrupt character.
+  if (process.platform === 'win32') {
+    win.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || input.isAutoRepeat ||
+          !input.control || input.shift || input.alt || input.meta) return;
+      const key = String(input.key).toLowerCase();
+      if (key === 'c' || input.code === 'KeyC') win.webContents.send('terminal-copy-or-interrupt');
+      else if (key === 'v' || input.code === 'KeyV') win.webContents.send('terminal-paste');
+      else return;
+      event.preventDefault();
+    });
+  }
+
   // Chromium persists per-window page zoom. A stray Cmd+- (old zoom binding)
   // could leave the UI zoomed with no way to reset it now that font shortcuts
   // replaced the zoom menu. Pin page zoom to 100% on every load.
@@ -1305,7 +1319,7 @@ function buildMenu() {
   // On Linux (GNOME style), Preferences goes under Edit menu, not the App menu.
   // macOS keeps Settings under the app name menu; Windows keeps it under App.
   const isLinux = process.platform === 'linux';
-  const editMenu = isLinux
+  const editMenu = !isMac
     ? {
       label: 'Edit',
       submenu: [
@@ -1313,11 +1327,10 @@ function buildMenu() {
         { role: 'redo' },
         { type: 'separator' },
         { role: 'cut' },
-        { label: 'Copy', accelerator: 'Ctrl+Shift+C', click: send('terminal-copy') },
-        { label: 'Paste', accelerator: 'Ctrl+Shift+V', click: send('terminal-paste') },
+        { label: 'Copy', accelerator: isLinux ? 'Ctrl+Shift+C' : 'Ctrl+C', click: send('terminal-copy') },
+        { label: 'Paste', accelerator: isLinux ? 'Ctrl+Shift+V' : 'Ctrl+V', click: send('terminal-paste') },
         { role: 'selectAll' },
-        { type: 'separator' },
-        settingsItem
+        ...(isLinux ? [{ type: 'separator' }, settingsItem] : [])
       ]
     }
     : { role: 'editMenu' };

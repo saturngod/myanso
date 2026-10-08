@@ -103,6 +103,12 @@ selection to open **Copy**; **Paste** is also available in the right-click menu.
 Pasting preserves bracketed-paste handling for terminal applications. Plain
 **Ctrl+C** continues to interrupt the running command.
 
+## Windows copy and paste
+
+Use **Ctrl+C** to copy selected terminal text and **Ctrl+V** to paste. Copy and
+Paste are available in the Edit and right-click menus. With no terminal text
+selected, **Ctrl+C** interrupts the running command.
+
 ## Architecture
 
 Core files, no JavaScript bundling step:

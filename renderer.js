@@ -2186,7 +2186,12 @@ function editClipboard(action) {
   const isTextField = target &&
     !target.classList.contains('xterm-helper-textarea') &&
     (target.matches('input, textarea') || target.isContentEditable);
-  if (isTextField) ipcRenderer.send('clipboard-edit', action);
+  if (isTextField) ipcRenderer.send('clipboard-edit', action === 'copy-or-interrupt' ? 'copy' : action);
+  else if (action === 'copy-or-interrupt') {
+    if (!activePane) return;
+    if (activePane.term.getSelection()) copyPane(activePane);
+    else if (!activePane._provisional) ipcRenderer.send('pty-input', { id: activePane.ptyId, data: '\x03' });
+  }
   else if (action === 'copy') copyPane(activePane);
   else if (action === 'paste') pastePane(activePane);
 }
@@ -2321,8 +2326,8 @@ function showPaneMenu(x, y, pane) {
   hidePaneMenu();
   const hasSel = !!(pane.term.getSelection());
   const items = [];
-  if (hasSel) items.push({ label: 'Copy', icon: 'copy', shortcut: IS_LINUX ? 'Ctrl+Shift+C' : '', action: () => copyPane(pane) });
-  items.push({ label: 'Paste', icon: 'paste', shortcut: IS_LINUX ? 'Ctrl+Shift+V' : '', action: () => pastePane(pane) });
+  if (hasSel) items.push({ label: 'Copy', icon: 'copy', shortcut: IS_LINUX ? 'Ctrl+Shift+C' : IS_WIN ? 'Ctrl+C' : '', action: () => copyPane(pane) });
+  items.push({ label: 'Paste', icon: 'paste', shortcut: IS_LINUX ? 'Ctrl+Shift+V' : IS_WIN ? 'Ctrl+V' : '', action: () => pastePane(pane) });
   items.push({ sep: true });
   items.push({ label: 'Split Right', icon: 'split-right', action: () => splitActive('row', false) });
   items.push({ label: 'Split Left', icon: 'split-left', action: () => splitActive('row', true) });
@@ -2389,6 +2394,7 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+ipcRenderer.on('terminal-copy-or-interrupt', () => editClipboard('copy-or-interrupt'));
 ipcRenderer.on('terminal-copy', () => editClipboard('copy'));
 ipcRenderer.on('terminal-paste', () => editClipboard('paste'));
 ipcRenderer.on('new-tab', () => newTab());
