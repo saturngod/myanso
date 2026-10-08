@@ -1018,6 +1018,12 @@
       background: var(--control-hover, rgba(255, 255, 255, 0.08));
     }
 
+    .pane-menu-shortcut {
+      margin-left: auto;
+      font-size: 12px;
+      opacity: 0.65;
+    }
+
     .pane-menu-icon {
       width: 17px;
       height: 17px;
@@ -1125,6 +1131,13 @@
     </button>
     <button class="app-menu-item" type="button" role="menuitem" data-action="close-pane">
       <span>Close pane or tab</span><span class="app-menu-shortcut">Ctrl+W</span>
+    </button>
+    <div class="app-menu-sep" role="separator"></div>
+    <button class="app-menu-item" type="button" role="menuitem" data-action="copy">
+      <span>Copy</span><span class="app-menu-shortcut">Ctrl+Shift+C</span>
+    </button>
+    <button class="app-menu-item" type="button" role="menuitem" data-action="paste">
+      <span>Paste</span><span class="app-menu-shortcut">Ctrl+Shift+V</span>
     </button>
     <div class="app-menu-sep" role="separator"></div>
     <button class="app-menu-item" type="button" role="menuitem" data-action="find">

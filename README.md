@@ -95,6 +95,14 @@ rAF-debounced renderer already batches frames, so there's no flicker cost.
 - Column alignment of wide/proportional glyphs can drift slightly — the
   deliberate trade-off for correct shaping.
 
+## Linux copy and paste
+
+Use **Ctrl+Shift+C** to copy selected terminal text and **Ctrl+Shift+V** to
+paste. Both actions are available in the hamburger menu. Right-click a terminal
+selection to open **Copy**; **Paste** is also available in the right-click menu.
+Pasting preserves bracketed-paste handling for terminal applications. Plain
+**Ctrl+C** continues to interrupt the running command.
+
 ## Architecture
 
 Core files, no JavaScript bundling step:

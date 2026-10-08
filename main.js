@@ -6,6 +6,7 @@ const { pathToFileURL } = require('url');
 const { exec, execSync, execFile } = require('child_process');
 const pty = require('node-pty');
 const { stripSynchronizedOutput } = require('./lib/sync-output');
+const { loadWindowBounds, fitWindowBounds, saveWindowBounds, trackNormalWindowBounds } = require('./lib/window-state');
 const {
   MAX_INPUT_LENGTH,
   validPtyId,
@@ -549,18 +550,16 @@ function createWindow(pos, initialDir, opts) {
   // A window created to receive a torn-off tab must NOT open its own initial
   // tab — the adopted tab is the only one it should show.
   if (opts && opts.noInitialTab) extraArgs.push('--myanso-no-tab');
-  if (pos) {
-    const area = screen.getDisplayNearestPoint(pos).workArea;
-    pos = {
-      x: Math.max(area.x, Math.min(pos.x, area.x + Math.max(0, area.width - 900))),
-      y: Math.max(area.y, Math.min(pos.y, area.y + Math.max(0, area.height - 600)))
-    };
-  }
+  // Keep the original filename so existing size-only preferences still load.
+  const windowSizeFile = path.join(app.getPath('userData'), 'window-size.json');
+  const savedBounds = loadWindowBounds(windowSizeFile);
+  const requestedBounds = pos ? { ...savedBounds, x: pos.x, y: pos.y } : savedBounds;
+  const display = pos ? screen.getDisplayNearestPoint(pos)
+    : requestedBounds.x !== undefined ? screen.getDisplayMatching(requestedBounds)
+      : screen.getPrimaryDisplay();
+  const bounds = fitWindowBounds(requestedBounds, display.workArea);
   const win = new BrowserWindow({
-    width: 900,
-    height: 600,
-    x: pos && pos.x,
-    y: pos && pos.y,
+    ...bounds,
     backgroundColor: '#1e1e1e',
     icon: iconPath,
     frame: process.platform !== 'linux',
@@ -580,6 +579,8 @@ function createWindow(pos, initialDir, opts) {
       additionalArguments: extraArgs
     }
   });
+
+  const currentNormalBounds = trackNormalWindowBounds(win);
 
   // Only the local application document may request local-font enumeration.
   // The handler is session-wide, so install the strict policy once.
@@ -609,7 +610,9 @@ function createWindow(pos, initialDir, opts) {
       const send = (channel, ...args) => win.webContents.send(channel, ...args);
       let handled = true;
 
-      if (isKey('t') && !input.shift) send('new-tab');
+      if (isKey('c') && input.shift) send('terminal-copy');
+      else if (isKey('v') && input.shift) send('terminal-paste');
+      else if (isKey('t') && !input.shift) send('new-tab');
       else if (isKey('n') && !input.shift) createWindow();
       else if (isKey('w') && !input.shift) send('close-pane');
       else if (isKey('f') && !input.shift) send('find');
@@ -664,13 +667,21 @@ function createWindow(pos, initialDir, opts) {
   // IPC so a busy pane isn't killed without asking. Async: preventDefault holds
   // the close, then re-issue win.close() once the user confirms.
   win.on('close', (e) => {
-    if (win._readyToClose) return;
-    const labels = busyLabelsForWindow(win.id);
-    if (labels.length === 0) return;
-    e.preventDefault();
-    confirmBusyClose(win, labels, 'Close').then((ok) => {
-      if (ok && !win.isDestroyed()) { win._readyToClose = true; win.close(); }
-    });
+    if (!win._readyToClose) {
+      const labels = busyLabelsForWindow(win.id);
+      if (labels.length > 0) {
+        e.preventDefault();
+        confirmBusyClose(win, labels, 'Close').then((ok) => {
+          if (ok && !win.isDestroyed()) { win._readyToClose = true; win.close(); }
+        });
+        return;
+      }
+    }
+    // Use the geometry tracked while moving/resizing the normal window.
+    // Reading native normal bounds only at close can return the creation frame.
+    if (!saveWindowBounds(windowSizeFile, currentNormalBounds())) {
+      console.warn('Could not save window bounds');
+    }
   });
 
   win.on('closed', () => {
@@ -1015,6 +1026,12 @@ function setupIpc() {
   });
   ipcMain.on('open-window', (event) => { if (senderWindow(event)) createWindow(); });
   ipcMain.on('quit-app', (event) => { if (senderWindow(event)) app.quit(); });
+  // Clipboard shortcuts in settings/find fields retain native text editing.
+  ipcMain.on('clipboard-edit', (event, action) => {
+    if (!senderWindow(event)) return;
+    if (action === 'copy') event.sender.copy();
+    else if (action === 'paste') event.sender.paste();
+  });
 
   // A renderer reports its tab count; refresh the menu if it is the focused one.
   // renderTabBar() sends this on every tab switch too, so skip the (relatively
@@ -1296,8 +1313,8 @@ function buildMenu() {
         { role: 'redo' },
         { type: 'separator' },
         { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
+        { label: 'Copy', accelerator: 'Ctrl+Shift+C', click: send('terminal-copy') },
+        { label: 'Paste', accelerator: 'Ctrl+Shift+V', click: send('terminal-paste') },
         { role: 'selectAll' },
         { type: 'separator' },
         settingsItem

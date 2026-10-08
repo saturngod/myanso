@@ -916,9 +916,12 @@ function createPane(tabId, cwd, reattach) {
   // Right-click → custom context menu (Copy when text is selected, Paste, splits).
   el.addEventListener('contextmenu', (e) => {
     e.preventDefault();
+    // Linux uses our menu: bypass xterm's native-menu preparation, which
+    // moves and selects its hidden textarea under the pointer.
+    if (IS_LINUX) e.stopPropagation();
     setActivePane(pane);
     showPaneMenu(e.clientX, e.clientY, pane);
-  });
+  }, IS_LINUX);
 
   // Drag & drop a file (or folder) onto a pane → type its full path (no cd,
   // no Enter) so it works in the shell and in TUIs like Claude Code.
@@ -2171,9 +2174,21 @@ function copyPane(pane) {
   if (sel) clipboard.writeText(sel);
 }
 function pastePane(pane) {
+  if (!pane) return;
   const text = clipboard.readText();
   // term.paste emits bracketed-paste markers so TUIs treat it as pasted text.
   if (text) pane.term.paste(text);
+  pane.term.focus();
+}
+
+function editClipboard(action) {
+  const target = document.activeElement;
+  const isTextField = target &&
+    !target.classList.contains('xterm-helper-textarea') &&
+    (target.matches('input, textarea') || target.isContentEditable);
+  if (isTextField) ipcRenderer.send('clipboard-edit', action);
+  else if (action === 'copy') copyPane(activePane);
+  else if (action === 'paste') pastePane(activePane);
 }
 
 // Inline SVG icons (currentColor) for the menu rows. The split icons fill the
@@ -2306,8 +2321,8 @@ function showPaneMenu(x, y, pane) {
   hidePaneMenu();
   const hasSel = !!(pane.term.getSelection());
   const items = [];
-  if (hasSel) items.push({ label: 'Copy', icon: 'copy', action: () => copyPane(pane) });
-  items.push({ label: 'Paste', icon: 'paste', action: () => pastePane(pane) });
+  if (hasSel) items.push({ label: 'Copy', icon: 'copy', shortcut: IS_LINUX ? 'Ctrl+Shift+C' : '', action: () => copyPane(pane) });
+  items.push({ label: 'Paste', icon: 'paste', shortcut: IS_LINUX ? 'Ctrl+Shift+V' : '', action: () => pastePane(pane) });
   items.push({ sep: true });
   items.push({ label: 'Split Right', icon: 'split-right', action: () => splitActive('row', false) });
   items.push({ label: 'Split Left', icon: 'split-left', action: () => splitActive('row', true) });
@@ -2333,6 +2348,12 @@ function showPaneMenu(x, y, pane) {
     const row = document.createElement('div');
     row.className = 'pane-menu-item';
     row.innerHTML = svgIcon(it.icon) + '<span>' + it.label + '</span>';
+    if (it.shortcut) {
+      const shortcut = document.createElement('span');
+      shortcut.className = 'pane-menu-shortcut';
+      shortcut.textContent = it.shortcut;
+      row.appendChild(shortcut);
+    }
     row.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -2368,6 +2389,8 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+ipcRenderer.on('terminal-copy', () => editClipboard('copy'));
+ipcRenderer.on('terminal-paste', () => editClipboard('paste'));
 ipcRenderer.on('new-tab', () => newTab());
 ipcRenderer.on('open-folder', (event, payload) => {
   if (payload && typeof payload.path === 'string' && payload.path.length <= 8192) newTab(payload.path);
@@ -2756,10 +2779,12 @@ function runAppMenuAction(action) {
   else if (action === 'font-inc') changeFontSize(settings.fontSize + 1);
   else if (action === 'font-reset') changeFontSize(DEFAULTS.fontSize);
   else {
-    setAppMenuOpen(false);
+    setAppMenuOpen(false, action === 'copy' || action === 'paste');
     if (action === 'new-tab') newTab();
     else if (action === 'new-window') ipcRenderer.send('open-window');
     else if (action === 'close-pane' && activePane) requestClosePane(activePane);
+    else if (action === 'copy') copyPane(activePane);
+    else if (action === 'paste') pastePane(activePane);
     else if (action === 'find') openFind();
     else if (action === 'split-right') splitActive('row');
     else if (action === 'split-down') splitActive('col');
