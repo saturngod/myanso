@@ -737,7 +737,19 @@ function updatePaneMarkWidth(pane) {
   const mode = paneAppWidthMode(pane);
   if (term._myanAppMode === mode) return;
   term._myanAppMode = mode;
+  const before = term.unicode.activeVersion;
   term._applyMyanWidth();
+  // The app is detected by polling, so it may already have drawn its first
+  // frame under the old widths. TUIs like opencode only repaint cells they think
+  // changed, so those misplaced cells would stay garbled. Nudge the pty size to
+  // make the app redraw everything under the new widths.
+  if (mode && term.unicode.activeVersion !== before && !pane._provisional) {
+    const { cols, rows } = term;
+    ipcRenderer.send('pty-resize', { id: pane.ptyId, cols: Math.max(1, cols - 1), rows });
+    setTimeout(() => {
+      if (pane.term === term) ipcRenderer.send('pty-resize', { id: pane.ptyId, cols: term.cols, rows: term.rows });
+    }, 50);
+  }
 }
 
 // Shift+Enter: xterm sends a bare CR (0x0d, same as Enter), so TUIs like Claude
