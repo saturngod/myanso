@@ -15,11 +15,14 @@
  * so consecutive same-style cells collapse into a single span and the browser
  * shapes the whole cluster:  <span>မြန်မာ</span>
  *
- * Box drawing and block elements (U+2500–U+259F) retain width compensation
- * so TUI graphics stay on the cell grid even with fallback fonts.
- * Trade-off: other width-compensation is disabled, so proportional/wide glyphs are
- * no longer nudged onto the grid (column alignment can drift). That is the
- * intended trade — correct text over perfect monospace alignment.
+ * Only Myanmar text skips the width correction. Every other glyph (Latin,
+ * spaces, box drawing, block elements) keeps xterm's normal per-glyph spacing,
+ * so it stays on the cell grid even when the font isn't monospace. Without
+ * this, a row of background-colored spaces in a proportional fallback font
+ * (e.g. Noto Sans Myanmar as `monospace`) renders narrower than the row and
+ * TUIs like opencode show unpainted gaps on the right.
+ * Trade-off: Myanmar glyphs aren't nudged onto the grid, so Myanmar text can
+ * drift slightly — correct shaping over perfect monospace alignment.
  *
  * Idempotent. Run after every `npm install` (wired into postinstall).
  */
@@ -46,14 +49,20 @@ const targets = [
   {
     name: 'xterm.js',
     find: 'M=C*c-u.get(j,F.isBold(),F.isItalic())',
-    legacy: 'M=this.defaultSpacing',
-    replace: 'M=/[\\u2500-\\u259f]/.test(j)?C*c-u.get(j,F.isBold(),F.isItalic()):this.defaultSpacing',
+    legacy: [
+      'M=this.defaultSpacing',
+      'M=/[\\u2500-\\u259f]/.test(j)?C*c-u.get(j,F.isBold(),F.isItalic()):this.defaultSpacing',
+    ],
+    replace: 'M=/[\\u1000-\\u109f\\ua9e0-\\ua9ff\\uaa60-\\uaa7f]/.test(j)?this.defaultSpacing:C*c-u.get(j,F.isBold(),F.isItalic())',
   },
   {
     name: 'xterm.mjs',
     find: 'Ke=T*a-u.get(ze,x.isBold(),x.isItalic())',
-    legacy: 'Ke=this.defaultSpacing',
-    replace: 'Ke=/[\\u2500-\\u259f]/.test(ze)?T*a-u.get(ze,x.isBold(),x.isItalic()):this.defaultSpacing',
+    legacy: [
+      'Ke=this.defaultSpacing',
+      'Ke=/[\\u2500-\\u259f]/.test(ze)?T*a-u.get(ze,x.isBold(),x.isItalic()):this.defaultSpacing',
+    ],
+    replace: 'Ke=/[\\u1000-\\u109f\\ua9e0-\\ua9ff\\uaa60-\\uaa7f]/.test(ze)?this.defaultSpacing:T*a-u.get(ze,x.isBold(),x.isItalic())',
   },
   // 2) Keep a combining-mark cell in its base's span even when the cell's style
   //    differs (e.g. a TUI app draws an inverse-video cursor on a trailing mark
@@ -115,9 +124,10 @@ function applyPatch(baseDirectory = base, log = console.log) {
       statuses.push({ name: t.name, status: 'already patched' });
       continue;
     }
-    // Upgrade installations carrying the older unconditional spacing patch.
-    if (t.legacy && state.staged.includes(t.legacy)) {
-      state.staged = state.staged.replace(t.legacy, t.replace);
+    // Upgrade installations carrying an older version of this patch.
+    const legacy = [].concat(t.legacy || []).find((old) => state.staged.includes(old));
+    if (legacy) {
+      state.staged = state.staged.replace(legacy, t.replace);
       statuses.push({ name: t.name, status: 'upgraded ✔' });
       continue;
     }

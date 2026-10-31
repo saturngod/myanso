@@ -15,7 +15,7 @@ function fixture(t) {
     let src = fs.readFileSync(path.join(installed, name), 'utf8');
     for (const target of [...targets].reverse().filter((item) => item.name === name)) {
       src = src.replace(target.replace, target.find);
-      if (target.legacy) src = src.replace(target.legacy, target.find);
+      for (const old of [].concat(target.legacy || [])) src = src.replace(old, target.find);
     }
     fs.writeFileSync(path.join(dir, name), src);
   }
@@ -36,26 +36,42 @@ test('fails when an expected file is missing', (t) => {
   assert.throws(() => applyPatch(dir, () => {}), /missing/);
 });
 
-test('upgrades the legacy spacing patch and keeps graphics width compensation', (t) => {
-  const dir = fixture(t);
-  for (const target of targets.filter((item) => item.legacy)) {
-    const p = path.join(dir, target.name);
-    fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace(target.find, target.legacy));
+test('upgrades every older spacing patch', (t) => {
+  const legacyTargets = targets.filter((item) => item.legacy);
+  const versions = Math.max(...legacyTargets.map((item) => [].concat(item.legacy).length));
+  for (let i = 0; i < versions; i++) {
+    const dir = fixture(t);
+    for (const target of legacyTargets) {
+      const old = [].concat(target.legacy)[i];
+      if (!old) continue;
+      const p = path.join(dir, target.name);
+      fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace(target.find, old));
+    }
+    applyPatch(dir, () => {});
+    for (const target of legacyTargets) {
+      const src = fs.readFileSync(path.join(dir, target.name), 'utf8');
+      assert.ok(src.includes(target.replace), `legacy #${i} of ${target.name}`);
+    }
   }
-  applyPatch(dir, () => {});
-  for (const target of targets.filter((item) => item.legacy)) {
-    assert.ok(fs.readFileSync(path.join(dir, target.name), 'utf8').includes(target.replace));
+});
+
+test('only Myanmar skips width compensation', () => {
+  // Latin, spaces and graphics keep their measured compensation so rows of
+  // background-colored spaces fill the cell grid even with proportional fonts.
+  // Myanmar takes the default-spacing path so adjacent cells can shape together.
+  for (const target of targets.slice(0, 2)) {
+    const [, lhs, glyph, cellW, width, measure, attrs] =
+      target.replace.match(/^(\w+)=.*\.test\((\w+)\)\?this\.defaultSpacing:(\w+)\*(\w+)-(\w+)\.get\(\w+,(\w+)\./);
+    const spacing = new Function(glyph, cellW, width, measure, attrs, `let ${lhs}; ${target.replace}; return ${lhs};`);
+    const style = { isBold: () => false, isItalic: () => false };
+    const ctx = { defaultSpacing: 0 };
+    for (const g of [' ', 'a', 'W', '█', '▀', '▄', '│', '─']) {
+      assert.equal(spacing.call(ctx, g, 1, 10, { get: () => 8 }, style), 2, `${target.name} ${JSON.stringify(g)}`);
+    }
+    for (const g of ['မြ', 'န်', 'ꩠ', 'ꧠ']) {
+      assert.equal(spacing.call(ctx, g, 1, 10, { get: () => 8 }, style), 0, `${target.name} ${g}`);
+    }
   }
-  // Graphics retain their measured compensation; Myanmar still takes the
-  // default-spacing path so adjacent cells can shape together.
-  const target = targets[0];
-  const spacing = new Function('j', 'C', 'c', 'u', 'F', `let M; ${target.replace}; return M;`);
-  const attrs = { isBold: () => false, isItalic: () => false };
-  const ctx = { defaultSpacing: 0 };
-  for (const glyph of ['█', '▀', '▄', '│', '─']) {
-    assert.equal(spacing.call(ctx, glyph, 1, 10, { get: () => 8 }, attrs), 2);
-  }
-  assert.equal(spacing.call(ctx, 'မြ', 1, 10, { get: () => 8 }, attrs), 0);
 });
 
 test('validates all targets before writing any file', (t) => {
