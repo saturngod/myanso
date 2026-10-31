@@ -680,8 +680,7 @@ function setupMarkWidth(term) {
   provider('myan-allone', isMyanmarMark, 1);         // all marks 1, own cell (Claude Code)
 
   // Width depends on the foreground app AND the screen:
-  //   Claude Code (any screen)  → all marks width 1 ('myan-allone') on macOS/Windows,
-  //                               standard ('myan-std') on Linux.
+  //   Claude Code (any screen)  → standard ('myan-std'); 2.1.3xx dropped all-one.
   //   Codex CLI (any screen)    → Mn=0, Mc=1 ('myan-std'), even on normal screen.
   //   opencode (any screen)     → all marks 0 ('myan-shell'), one cell per cluster.
   //   alt screen (vim, agy, …)  → standard ('myan-std').

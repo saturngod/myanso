@@ -37,7 +37,7 @@ Application များသည် မြန်မာစာလုံး/သင်
 |---|---|---|
 | `myan-shell` | သင်္ကေတများအားလုံး၏ width သည် 0 ဖြစ်သည် (ဗျည်း သို့မဟုတ် အခြေခံစာလုံးနှင့် ပေါင်းစပ်သည်) | zsh / shell (macOS ၏ `wcwidth` သည် သင်္ကေတများကို 0 အဖြစ် ရေတွက်သည်)၊ platform အားလုံးရှိ opencode (စာလုံးတွဲတစ်ခုလျှင် cell တစ်ခု) |
 | `myan-std` | non-spacing (Mn) သည် 0 ဖြစ်ပြီး spacing (Mc, ဥပမာ - `ာ း ြ`) သည် 1 ဖြစ်သည် | vim၊ agy၊ iTerm2၊ Codex CLI — ယူနီကုဒ်စံနှုန်း (Unicode standard) |
-| `myan-allone` | သင်္ကေတတိုင်း၏ width သည် 1 ဖြစ်သည် (သီးခြား cell တစ်ခုစီ) | macOS/Windows ပေါ်ရှိ Claude Code (သင်္ကေတအားလုံးကို 1 အဖြစ် ရေတွက်သည်)။ Linux ပေါ်တွင် Claude Code သည် standard width ကို သုံးသဖြင့် `myan-std` ကို ရသည် |
+| `myan-allone` | သင်္ကေတတိုင်း၏ width သည် 1 ဖြစ်သည် (သီးခြား cell တစ်ခုစီ) | Claude Code ဗားရှင်းဟောင်းများ (သင်္ကေတအားလုံးကို 1 အဖြစ် ရေတွက်သည်)။ လက်ရှိ Claude Code သည် standard width ကို သုံးသဖြင့် `myan-std` ကို ရသည် |
 
 Main process သည် PTY တစ်ခုချင်းစီ၏ foreground process (`node-pty` ၏ `.process`) ကို စစ်ဆေးပြီး renderer သို့ အကြောင်းကြားပေးသည်။ ထို့နောက် renderer မှ သင့်တော်သော provider ကို ရွေးချယ်သည်။ Claude Code ကို ၎င်း၏ terminal title (`Claude Code`) သို့မဟုတ် ၎င်း၏ version ပါဝင်သော process title (ဥပမာ - `2.1.165`) ဖြင့် စစ်ဆေးသိရှိနိုင်ပြီး ၎င်းပိတ်သွားပြီးနောက် title အဟောင်း ကျန်မနေစေရန်လည်း စနစ်တကျ ကာကွယ်ထားသည်။ Codex CLI သည် ယေဘုယျကျသော `node` process တစ်ခုအဖြစ် သတင်းပို့သောကြောင့် main process က (`pgrep` + `ps` အသုံးပြု၍) command line အပြည့်အစုံကို စစ်ဆေးကာ `codex` ဖြစ်ကြောင်း ရှာဖွေဖော်ထုတ်ပေးသည်။ ၎င်းသည် standard widths ကို အသုံးပြုသော်လည်း **normal** screen ပေါ်တွင် run သောကြောင့် `myan-std` ကို သုံးရန် အတင်းအကျပ် သတ်မှတ်ပေးရသည် (သို့မဟုတ်ပါက spacing marks များ ပျောက်ဆုံးသွားလိမ့်မည် - `မြန်မာ` → `မြန်မ`)။
 
