@@ -62,6 +62,15 @@ test('selects standard mode for Claude on Linux', () => {
   assert.equal(mode({ platform: 'linux', foreground: 'node', title: 'Claude Code' }), 'myan-std');
 });
 
+test('selects zero-width marks for opencode on every platform and screen', () => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    for (const screen of ['normal', 'alternate']) {
+      assert.equal(mode({ platform, screen, foreground: 'opencode' }), 'myan-shell');
+    }
+  }
+  assert.equal(mode({ foreground: '/home/u/.opencode/bin/opencode' }), 'myan-shell');
+});
+
 test('selects standard mode for resolved Codex CLI process', () => {
   assert.equal(mode({ foreground: 'node:123 /usr/bin/node /usr/local/bin/codex' }), 'myan-std');
 });

@@ -59,7 +59,7 @@ and switches between them based on the screen and the foreground process:
 
 | Provider | Marks | Used for |
 |---|---|---|
-| `myan-shell` | all marks width **0** (joined onto the base) | zsh / shell (macOS `wcwidth` counts marks as 0) |
+| `myan-shell` | all marks width **0** (joined onto the base) | zsh / shell (macOS `wcwidth` counts marks as 0), opencode on every platform (one cell per grapheme cluster) |
 | `myan-std` | non-spacing (Mn) **0**, spacing (Mc, e.g. `ာ း ြ`) **1** | vim, agy, iTerm2, Codex CLI — the Unicode standard |
 | `myan-allone` | every mark width **1** (own cell) | Claude Code on macOS/Windows (it counts all marks as 1). On Linux Claude Code uses standard widths, so it gets `myan-std` |
 

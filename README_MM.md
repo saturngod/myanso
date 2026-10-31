@@ -35,7 +35,7 @@ Application များသည် မြန်မာစာလုံး/သင်
 
 | Provider | သင်္ကေတများ (Marks) | အသုံးပြုသည့်နေရာ (Used for) |
 |---|---|---|
-| `myan-shell` | သင်္ကေတများအားလုံး၏ width သည် 0 ဖြစ်သည် (ဗျည်း သို့မဟုတ် အခြေခံစာလုံးနှင့် ပေါင်းစပ်သည်) | zsh / shell (macOS ၏ `wcwidth` သည် သင်္ကေတများကို 0 အဖြစ် ရေတွက်သည်) |
+| `myan-shell` | သင်္ကေတများအားလုံး၏ width သည် 0 ဖြစ်သည် (ဗျည်း သို့မဟုတ် အခြေခံစာလုံးနှင့် ပေါင်းစပ်သည်) | zsh / shell (macOS ၏ `wcwidth` သည် သင်္ကေတများကို 0 အဖြစ် ရေတွက်သည်)၊ platform အားလုံးရှိ opencode (စာလုံးတွဲတစ်ခုလျှင် cell တစ်ခု) |
 | `myan-std` | non-spacing (Mn) သည် 0 ဖြစ်ပြီး spacing (Mc, ဥပမာ - `ာ း ြ`) သည် 1 ဖြစ်သည် | vim၊ agy၊ iTerm2၊ Codex CLI — ယူနီကုဒ်စံနှုန်း (Unicode standard) |
 | `myan-allone` | သင်္ကေတတိုင်း၏ width သည် 1 ဖြစ်သည် (သီးခြား cell တစ်ခုစီ) | macOS/Windows ပေါ်ရှိ Claude Code (သင်္ကေတအားလုံးကို 1 အဖြစ် ရေတွက်သည်)။ Linux ပေါ်တွင် Claude Code သည် standard width ကို သုံးသဖြင့် `myan-std` ကို ရသည် |
 

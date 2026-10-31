@@ -626,7 +626,7 @@ function renderPreview() {
 //   'myan-allone' — every mark width 1 (own cell). For apps that count all marks as
 //                   1 (Claude Code); without it they leave gaps (ဘူး → "ဘူ း").
 // The foreground app is detected in main.js (pollPtyProcesses) → 'pty-process' IPC
-// → paneWantsAllOne(). Mark *shaping* (merging a cluster into one span) is done by
+// → paneAppWidthMode(). Mark *shaping* (merging a cluster into one span) is done by
 // the xterm patch, independent of width.
 //
 // isMyanmarMark = the full Myanmar mark range (mirrors MARK() in the xterm patch);
@@ -683,47 +683,35 @@ function setupMarkWidth(term) {
   //   Claude Code (any screen)  → all marks width 1 ('myan-allone') on macOS/Windows,
   //                               standard ('myan-std') on Linux.
   //   Codex CLI (any screen)    → Mn=0, Mc=1 ('myan-std'), even on normal screen.
+  //   opencode (any screen)     → all marks 0 ('myan-shell'), one cell per cluster.
   //   alt screen (vim, agy, …)  → standard ('myan-std').
   //   normal screen (zsh, …)    → all marks 0 ('myan-shell') on macOS, but
   //                               'myan-std' (Mc=1) on Linux to match glibc wcwidth.
-  // term._myanForceAllOne / term._myanForceStd set by the pty-process IPC handler.
+  // term._myanAppMode (an app's own mode, or null) is set by the pty-process IPC handler.
   const apply = () => {
-    term.unicode.activeVersion = term._myanForceAllOne
-      ? 'myan-allone'
-      : (term._myanForceStd || term.buffer.active.type === 'alternate')
-        ? 'myan-std'
-        : NORMAL_SCREEN_VERSION;
+    term.unicode.activeVersion = term._myanAppMode
+      || (term.buffer.active.type === 'alternate' ? 'myan-std' : NORMAL_SCREEN_VERSION);
   };
   term._applyMyanWidth = apply;   // let the pty-process handler re-apply on app change
   term.buffer.onBufferChange(apply);
   apply();
 }
 
-// Decide if a pane needs the 'myan-allone' provider (every Myanmar mark width 1).
-// Claude Code is the app that does this (macOS/Windows only; on Linux it uses
-// standard widths, see lib/myanmar-width.js). We identify it from two signals, both
-// version-independent:
+// Width mode the pane's foreground app needs, or null to follow the screen default.
+// See lib/myanmar-width.js for the per-app rules (Claude Code, Codex, opencode).
+// Claude Code is identified from two signals, both version-independent:
 //   1. The terminal title it sets via OSC 2 — "Claude Code" (see onTitleChange).
 //   2. Its foreground process name — a bare version string like "2.1.165" (it
 //      sets process.title to the version), or "claude".
 // A plain shell in the foreground means no TUI is running, so we never force then
 // — this also stops a *stale* "Claude Code" title from sticking after you quit it.
-function paneWantsAllOne(pane) {
+function paneAppWidthMode(pane) {
   return appWidthModeForContext({
     platform: process.platform,
     foreground: pane._fgProcess,
     title: pane.title,
     configuredShell: process.env.SHELL
-  }) === 'myan-allone';
-}
-
-function paneWantsStd(pane) {
-  return appWidthModeForContext({
-    platform: process.platform,
-    foreground: pane._fgProcess,
-    title: pane.title,
-    configuredShell: process.env.SHELL
-  }) === 'myan-std';
+  });
 }
 
 // Closing a pane/tab asks first when a non-shell program is still running in it
@@ -747,11 +735,9 @@ function updatePaneMarkWidth(pane) {
   if (!pane) return;
   const term = pane.term;
   if (!term || !term._applyMyanWidth) return;           // mountPane will re-apply later
-  const allOne = paneWantsAllOne(pane);
-  const std = !allOne && paneWantsStd(pane);
-  if (term._myanForceAllOne === allOne && term._myanForceStd === std) return;
-  term._myanForceAllOne = allOne;
-  term._myanForceStd = std;
+  const mode = paneAppWidthMode(pane);
+  if (term._myanAppMode === mode) return;
+  term._myanAppMode = mode;
   term._applyMyanWidth();
 }
 
