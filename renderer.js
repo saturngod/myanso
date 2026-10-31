@@ -680,7 +680,8 @@ function setupMarkWidth(term) {
   provider('myan-allone', isMyanmarMark, 1);         // all marks 1, own cell (Claude Code)
 
   // Width depends on the foreground app AND the screen:
-  //   Claude Code (any screen)  → all marks width 1 ('myan-allone').
+  //   Claude Code (any screen)  → all marks width 1 ('myan-allone') on macOS/Windows,
+  //                               standard ('myan-std') on Linux.
   //   Codex CLI (any screen)    → Mn=0, Mc=1 ('myan-std'), even on normal screen.
   //   alt screen (vim, agy, …)  → standard ('myan-std').
   //   normal screen (zsh, …)    → all marks 0 ('myan-shell') on macOS, but
@@ -699,7 +700,8 @@ function setupMarkWidth(term) {
 }
 
 // Decide if a pane needs the 'myan-allone' provider (every Myanmar mark width 1).
-// Claude Code is the app that does this. We identify it from two signals, both
+// Claude Code is the app that does this (macOS/Windows only; on Linux it uses
+// standard widths, see lib/myanmar-width.js). We identify it from two signals, both
 // version-independent:
 //   1. The terminal title it sets via OSC 2 — "Claude Code" (see onTitleChange).
 //   2. Its foreground process name — a bare version string like "2.1.165" (it
@@ -708,6 +710,7 @@ function setupMarkWidth(term) {
 // — this also stops a *stale* "Claude Code" title from sticking after you quit it.
 function paneWantsAllOne(pane) {
   return appWidthModeForContext({
+    platform: process.platform,
     foreground: pane._fgProcess,
     title: pane.title,
     configuredShell: process.env.SHELL
@@ -716,6 +719,7 @@ function paneWantsAllOne(pane) {
 
 function paneWantsStd(pane) {
   return appWidthModeForContext({
+    platform: process.platform,
     foreground: pane._fgProcess,
     title: pane.title,
     configuredShell: process.env.SHELL

@@ -61,7 +61,7 @@ and switches between them based on the screen and the foreground process:
 |---|---|---|
 | `myan-shell` | all marks width **0** (joined onto the base) | zsh / shell (macOS `wcwidth` counts marks as 0) |
 | `myan-std` | non-spacing (Mn) **0**, spacing (Mc, e.g. `ာ း ြ`) **1** | vim, agy, iTerm2, Codex CLI — the Unicode standard |
-| `myan-allone` | every mark width **1** (own cell) | Claude Code (it counts all marks as 1) |
+| `myan-allone` | every mark width **1** (own cell) | Claude Code on macOS/Windows (it counts all marks as 1). On Linux Claude Code uses standard widths, so it gets `myan-std` |
 
 The main process polls each PTY's foreground process (`node-pty`'s `.process`)
 and tells the renderer; the renderer picks the provider. Claude Code is detected

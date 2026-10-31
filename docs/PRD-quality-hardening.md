@@ -104,7 +104,7 @@ The following behavior is release-blocking and must remain unchanged:
 | macOS normal shell screen | `myan-shell` |
 | Linux normal shell screen | `myan-std` |
 | Alternate screen, including vim and agy | `myan-std` |
-| Claude Code | `myan-allone` |
+| Claude Code | `myan-allone` (macOS/Windows), `myan-std` (Linux) |
 | Codex CLI on the normal screen | `myan-std` |
 
 Additional protected behavior:

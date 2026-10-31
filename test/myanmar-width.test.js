@@ -53,6 +53,13 @@ test('selects Claude all-one mode from process, semver, or title', () => {
   assert.equal(mode({ foreground: 'claude' }), 'myan-allone');
   assert.equal(mode({ foreground: '2.1.165' }), 'myan-allone');
   assert.equal(mode({ foreground: 'node', title: 'Claude Code' }), 'myan-allone');
+  assert.equal(mode({ platform: 'win32', foreground: 'claude' }), 'myan-allone');
+});
+
+test('selects standard mode for Claude on Linux', () => {
+  assert.equal(mode({ platform: 'linux', foreground: 'claude' }), 'myan-std');
+  assert.equal(mode({ platform: 'linux', foreground: '2.1.316' }), 'myan-std');
+  assert.equal(mode({ platform: 'linux', foreground: 'node', title: 'Claude Code' }), 'myan-std');
 });
 
 test('selects standard mode for resolved Codex CLI process', () => {
