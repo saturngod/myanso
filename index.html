@@ -20,6 +20,22 @@
       overflow: hidden;
     }
 
+    /* Glyph-accurate selection (lib/glyph-selection.js) replaces xterm's
+       grid-based highlight, which drifts off merged Myanmar text. */
+    .xterm.myanso-glyph-select .xterm-selection {
+      visibility: hidden;
+    }
+
+    .xterm .xterm-screen .myanso-selection {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 1;
+      pointer-events: none;
+    }
+
     body {
       display: flex;
       flex-direction: column;

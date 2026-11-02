@@ -7,6 +7,7 @@ const { SearchAddon } = require('@xterm/addon-search');
 const { quoteShellPath, parseOsc7, terminalBasename } = require('./lib/terminal-utils');
 const { insertionIndex, edgeScrollVelocity } = require('./lib/tab-drag');
 const { isMyanmarMark, isMyanmarNonspacing, appWidthModeForContext } = require('./lib/myanmar-width');
+const { attachGlyphSelection } = require('./lib/glyph-selection');
 const {
   validPtyId, validTabId, validTabDescriptor, validTabDragResult, validPaneTransfer
 } = require('./lib/ipc-validation');
@@ -1031,6 +1032,9 @@ function mountPane(pane) {
   if (pane.opened) return;
   pane.opened = true;
   pane.term.open(pane.host);
+  // Draw the selection and hit-test the mouse against real glyph positions,
+  // since merged Myanmar spans no longer line up with the cell grid.
+  pane._glyphSelection = attachGlyphSelection(pane.term);
   // Install the correct width provider before replaying a transferred screen.
   setupMarkWidth(pane.term);
   updatePaneMarkWidth(pane);
